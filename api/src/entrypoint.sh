@@ -3,6 +3,10 @@ set -e
 
 echo "Starting NsJail sandbox API..."
 
+# Rootfs COPY carries the addon file, but not the build image's Docker ENV.
+# Establish its installed path inside the guest, after the VM/chroot boundary.
+export SANDBOX_PIPE_ADDON="${SANDBOX_PIPE_ADDON:-/usr/local/lib/anonymous-pipes.node}"
+
 # Raise the RLIMIT_NOFILE limits so per-job nsjail can set its own soft
 # limit (SANDBOX_MAX_OPEN_FILES) without EPERM. The AWS Lambda MicroVM base
 # image ships a 1024 hard cap, below the sandbox default of 2048; nsjail
