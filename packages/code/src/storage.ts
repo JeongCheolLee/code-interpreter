@@ -223,7 +223,18 @@ async function readGuardedFile(
       if ((mode & 0o077) !== 0) throw new BridgeProtocolError(exposed(mode.toString(8)));
     }
     await assertPrivateStorageAcl(handle, path);
-    return await handle.readFile('utf8');
+    if (!Number.isFinite(maxBytes)) return await handle.readFile('utf8');
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    if (length > maxBytes) {
+      throw new BridgeProtocolError('Invalid private storage file size or type');
+    }
+    return buffer.toString('utf8', 0, length);
   } finally {
     await handle.close();
   }
@@ -360,6 +371,7 @@ async function assertSiblingPublishable(path: string): Promise<void> {
 
 export async function assertIdentityPathIsPrivate(
   path: string,
+  createOnly = false,
 ): Promise<IdentityPathReservation> {
   assertPrivateStorageSupported();
   await assertWriteContainerPrivate(path);
@@ -389,6 +401,11 @@ export async function assertIdentityPathIsPrivate(
       throw error;
     }
     if (!isRecord(error) || error.code !== 'EEXIST') throw error;
+    if (createOnly) {
+      throw new BridgeProtocolError(
+        `${path} already exists; choose a different identity/profile path.`,
+      );
+    }
     /* Already present: judge what is there instead of the placeholder, and
      * prove the publish itself is possible - an unwritable parent would
      * otherwise surface as EACCES only after the code was spent. */
@@ -465,7 +482,25 @@ export async function saveEnvironmentPreparationKey(path: string, key: string): 
   await savePrivateJson(path, { version: 1, key });
 }
 
-async function savePrivateJson(path: string, value: unknown): Promise<void> {
+export async function readPrivateJson(path: string, maxBytes: number): Promise<unknown> {
+  assertPrivateStorageSupported();
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+    throw new BridgeProtocolError('Private JSON file limit must be a positive integer');
+  }
+  const content = await readGuardedFile(
+    path,
+    (mode) => `Private JSON file ${path} must be owner-only (mode ${mode})`,
+    maxBytes,
+  );
+  await assertReadPathPrivate(path);
+  try {
+    return JSON.parse(content) as unknown;
+  } catch {
+    throw new BridgeProtocolError(`Invalid private JSON file: ${path}`);
+  }
+}
+
+export async function savePrivateJson(path: string, value: unknown): Promise<void> {
   assertPrivateStorageSupported();
   await assertWriteContainerPrivate(path);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });

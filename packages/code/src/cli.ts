@@ -5,6 +5,10 @@ import { readdir, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve, relative, isAbsolute, sep } from 'node:path';
 
 import { pairBridgeWorker } from './pairing.js';
+import { runSetupCommand } from './setup-cli.js';
+import { profileRunConfiguration } from './setup.js';
+import { assertWorkerProfileIsolation } from './worker-profile.js';
+import type { WorkerProfile } from './worker-profile.js';
 import { discoverProjects } from './projects.js';
 import { loadProjectRoots, projectRootArguments } from './project-roots.js';
 import {
@@ -358,6 +362,7 @@ async function relay(): Promise<void> {
 async function run(
   runtimeSessionId?: string,
   args: string[] = [],
+  savedProfile?: { path: string; config: WorkerProfile },
 ): Promise<void> {
     const projectArgs = projectRootArguments(args);
     if (
@@ -422,7 +427,7 @@ async function run(
     }
   const configuredWorkerId = process.env.LIBRECHAT_CODE_WORKER_ID?.trim();
   const configuredIdentityPath =
-    process.env.LIBRECHAT_CODE_IDENTITY_FILE?.trim();
+    savedProfile?.config.identityPath ?? process.env.LIBRECHAT_CODE_IDENTITY_FILE?.trim();
   const configuredToken = process.env.LIBRECHAT_CODE_WORKER_TOKEN?.trim();
   const identityPath =
     configuredIdentityPath ??
@@ -644,6 +649,9 @@ async function run(
     } catch {
       throw new Error('Invalid workspace registration');
     }
+  }
+  if (savedProfile) {
+    await assertWorkerProfileIsolation(savedProfile.path, identityPath!, canonicalWorkerDirectory);
   }
   const mutationQuarantinePath =
         (allowWorkspaceWrites || allowWorkspaceCommands) &&
@@ -1092,6 +1100,7 @@ async function run(
     commandPolicy,
     protectedPaths: [
       identityPath,
+      savedProfile?.path,
       ...(environments.some(environment => environment.definition.setup?.reuse) ? [preparationDirectory] : []),
       ...snapshotStores.map(store => store.store),
             ...environments.map(environment => environment.path),
@@ -1766,6 +1775,26 @@ async function clearMutationQuarantine(args: string[]): Promise<void> {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args.length === 1 && (args[0] === '--help' || args[0] === 'help')) {
+    process.stdout.write(`Usage: librechat-code <command>
+
+  setup             Guided pairing and private profile setup
+  run [--profile <file>]  Start a saved profile or existing worker configuration
+  pair <url> <code> --worker-id <id>  Existing one-time pairing flow
+  projects --root <directory>       Inspect local Git projects
+  reset-workspace <id>              Existing runtime maintenance
+  clear-workspace-quarantine       Existing workspace maintenance
+
+Run librechat-code setup --help for setup options.
+Legacy LIBRECHAT_CODE_* configuration takes precedence over the default profile.
+Explicit profiles cannot be mixed with legacy settings or run options.
+`);
+    return;
+  }
+  if (args[0] === 'setup') {
+    await runSetupCommand(args.slice(1));
+    return;
+  }
   if (args[0] === 'prune-environment-storage') {
     const paths: string[] = [];
     for (let i = 1; i < args.length; i++) {
@@ -1823,7 +1852,10 @@ async function main(): Promise<void> {
   if (args[0] && args[0] !== 'run') {
     throw new Error(`Unknown command: ${args[0]}`);
   }
-  await run(undefined, args.slice(1));
+  const configuration = await profileRunConfiguration(args.slice(1));
+  await run(undefined, configuration.args, configuration.profile && configuration.profilePath
+    ? { path: configuration.profilePath, config: configuration.profile }
+    : undefined);
 }
 main().catch((error: Error) => {
   process.stderr.write(`librechat-code: ${error.message}\n`);
