@@ -203,54 +203,64 @@ test('CLI refuses unsafe URLs before disclosing the code', async t => {
   assert.ok(!result.stderr.includes(code));
 });
 
-test(
-  'terminal history never recalls a hidden pairing code at confirmation',
-  { timeout: 10_000 },
-  async t => {
-    const { env } = await fixture(t);
-    // Real readline terminal editing over pipes avoids an OS-specific PTY dependency.
-    const bootstrap = `
+for (const [name, secretEditing] of [
+  ['history', ''],
+  ['kill beginning', '\x15\x19'],
+  ['kill end', '\x01\x0b\x19'],
+  ['kill word', '\x17\x19'],
+])
+  test(
+    `terminal ${name} never recalls a hidden pairing code at confirmation`,
+    { timeout: 10_000 },
+    async t => {
+      const { env } = await fixture(t);
+      const secret = 'SyntheticPairingSecret0123456789';
+      // Real readline terminal editing over pipes avoids an OS-specific PTY dependency.
+      const bootstrap = `
     Object.defineProperty(process.stdin, 'isTTY', { value: true });
     Object.defineProperty(process.stdout, 'isTTY', { value: true });
     process.argv = [process.execPath, ${JSON.stringify(cli)}, 'setup', '--url',
       'https://code.example/v1', '--worker-id', 'history-vm', '--default-workspace'];
     await import(${JSON.stringify(new URL('./cli.js', import.meta.url).href)});
   `;
-    const child = spawn(
-      process.execPath,
-      ['--input-type=module', '--eval', bootstrap],
-      { env, stdio: 'pipe' },
-    );
-    t.after(() => child.kill('SIGKILL'));
-    let transcript = '';
-    let stderr = '';
-    let step = 0;
-    const inputs = [
-      { prompt: 'Allow file writes', input: '\n' },
-      { prompt: 'Allow sandboxed commands', input: '\n' },
-      { prompt: 'One-time pairing code (hidden): ', input: `${code}\n` },
-      // Up and Ctrl-P must not reveal the secret before it is redeemed.
-      {
-        prompt: 'Pair this machine and save these choices?',
-        input: '\x1b[A\x10\x15n\n',
-      },
-    ];
-    child.stderr.on('data', chunk => {
-      stderr += String(chunk);
-    });
-    child.stdout.on('data', chunk => {
-      transcript += String(chunk);
-      if (step < inputs.length && transcript.includes(inputs[step].prompt)) {
-        child.stdin.write(inputs[step++].input);
-      }
-    });
-    const [status] = await once(child, 'exit');
-    assert.equal(step, inputs.length, stderr);
-    assert.equal(status, 0, stderr);
-    assert.ok(
-      !transcript.includes(code),
-      'hidden pairing code was recalled visibly from history',
-    );
-    assert.match(transcript, /No pairing was redeemed/);
-  },
-);
+      const child = spawn(
+        process.execPath,
+        ['--input-type=module', '--eval', bootstrap],
+        { env, stdio: 'pipe' },
+      );
+      t.after(() => child.kill('SIGKILL'));
+      let transcript = '';
+      let stderr = '';
+      let step = 0;
+      const inputs = [
+        { prompt: 'Allow file writes', input: '\n' },
+        { prompt: 'Allow sandboxed commands', input: '\n' },
+        {
+          prompt: 'One-time pairing code (hidden): ',
+          input: `${secret}${secretEditing}\n`,
+        },
+        // History and yank must not reveal secret editing state before redemption.
+        {
+          prompt: 'Pair this machine and save these choices?',
+          input: '\x1b[A\x10\x19\x15n\n',
+        },
+      ];
+      child.stderr.on('data', chunk => {
+        stderr += String(chunk);
+      });
+      child.stdout.on('data', chunk => {
+        transcript += String(chunk);
+        if (step < inputs.length && transcript.includes(inputs[step].prompt)) {
+          child.stdin.write(inputs[step++].input);
+        }
+      });
+      const [status] = await once(child, 'exit');
+      assert.equal(step, inputs.length, stderr);
+      assert.equal(status, 0, stderr);
+      assert.ok(
+        !transcript.includes(secret),
+        'hidden pairing code was recalled visibly from history',
+      );
+      assert.match(transcript, /No pairing was redeemed/);
+    },
+  );

@@ -143,25 +143,27 @@ export async function runSetupCommand(args: string[]): Promise<void> {
       callback();
     },
   });
-  const terminal = interactive
-    ? createInterface({
-        input: process.stdin,
-        output,
-        terminal: true,
-        historySize: 0,
-      })
-    : undefined;
-  terminal?.on('SIGINT', abort);
-  terminal?.once('close', abort);
   const ask = async (message: string, secret = false): Promise<string> => {
     controller.signal.throwIfAborted();
-    process.stdout.write(message);
     muted = secret;
+    // Readline retains more than history (including a kill ring). Never reuse prompt state.
+    const terminal = createInterface({
+      input: process.stdin,
+      output,
+      terminal: true,
+      historySize: 0,
+    });
+    terminal.on('SIGINT', abort);
+    terminal.once('close', abort);
+    process.stdout.write(message);
     try {
       return (
-        await terminal!.question('', { signal: controller.signal })
+        await terminal.question('', { signal: controller.signal })
       ).trim();
     } finally {
+      terminal.off('close', abort);
+      terminal.off('SIGINT', abort);
+      terminal.close();
       muted = false;
       if (secret) process.stdout.write('\n');
     }
@@ -245,8 +247,6 @@ export async function runSetupCommand(args: string[]): Promise<void> {
       `\nSetup saved. Start the worker with:\n  librechat-code run${defaultProfile ? '' : ` --profile ${quotedProfile}`}\n\nPairing is complete. The worker still needs to start, prepare its sandbox,\nand register before LibreChat can report it ready.\n`,
     );
   } finally {
-    terminal?.off('close', abort);
-    terminal?.close();
     process.off('SIGINT', abort);
     output.destroy();
   }
