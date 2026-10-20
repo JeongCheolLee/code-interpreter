@@ -144,7 +144,12 @@ export async function runSetupCommand(args: string[]): Promise<void> {
     },
   });
   const terminal = interactive
-    ? createInterface({ input: process.stdin, output, terminal: true })
+    ? createInterface({
+        input: process.stdin,
+        output,
+        terminal: true,
+        historySize: 0,
+      })
     : undefined;
   terminal?.on('SIGINT', abort);
   terminal?.once('close', abort);
