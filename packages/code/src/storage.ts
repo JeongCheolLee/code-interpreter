@@ -11,7 +11,7 @@ import {
 } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { BRIDGE_PROTOCOL_VERSION, BridgeProtocolError } from './protocol.js';
 import { assertPrivateStorageAcl, removePrivateStorageAcl, assertPrivateStorageAncestors, assertPrivateStorageSupported } from './private-storage.js';
@@ -34,7 +34,10 @@ function isPairedIdentity(value: unknown): value is PairedBridgeWorkerIdentity {
     typeof value.expiresAt === 'string' &&
     Number.isFinite(Date.parse(value.expiresAt)) &&
     typeof value.publicKey === 'string' &&
-    typeof value.privateKey === 'string'
+    typeof value.privateKey === 'string' &&
+    (value.setupAttemptPath === undefined ||
+      (typeof value.setupAttemptPath === 'string' && isAbsolute(value.setupAttemptPath) &&
+        Buffer.byteLength(value.setupAttemptPath) <= 4096 && !/[\x00-\x1f\x7f]/.test(value.setupAttemptPath)))
   );
 }
 

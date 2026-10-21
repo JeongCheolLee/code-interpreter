@@ -1325,7 +1325,8 @@ test('protects retained browser setup keys outside home from command reads and w
   await sandbox.prepare();
   for (const path of paths) {
     const canonical = await realpath(path);
-    assert.ok(fake.config?.filesystem.denyRead.includes(canonical), 'setup keys must not be readable by commands');
+    assert.ok(fake.config?.credentials?.files?.some(file => file.path === canonical && file.mode === 'deny'),
+      'setup keys must be denied through the sandbox credential-file policy');
     assert.ok(fake.config?.filesystem.denyWrite.includes(canonical), 'commands must not replace setup state');
   }
 });

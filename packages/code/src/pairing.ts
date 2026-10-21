@@ -16,6 +16,8 @@ export interface PairedBridgeWorkerIdentity
   codeApiUrl: string;
   publicKey: string;
   privateKey: string;
+  /** Private setup journal to protect until completion removes its secret copies. */
+  setupAttemptPath?: string;
 }
 
 function normalizedBaseUrl(value: string): string {
