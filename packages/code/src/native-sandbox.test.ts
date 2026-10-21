@@ -32,7 +32,7 @@ import {
   NativeSrtWorkspaceCommandSandbox,
 } from './native-sandbox.js';
 import { restoreScratchTraversal } from './native-scratch.js';
-import { browserSetupProtectedPaths } from './browser-setup.js';
+import { browserSetupAttemptPath, browserSetupProtectedPaths } from './browser-setup.js';
 import { WorkspaceToolError } from './workspace.js';
 import { isWorkspaceToolResult } from './protocol.js';
 
@@ -1317,8 +1317,11 @@ test('protects retained browser setup keys outside home from command reads and w
   const state = join(root, 'state');
   await mkdir(workspace);
   await mkdir(state);
-  const paths = browserSetupProtectedPaths(join(state, 'profile.json.setup.json'));
-  for (const path of paths) await writeFile(path, 'private setup state', { mode: 0o600 });
+  const attempt = browserSetupAttemptPath(join(state, 'profile.json'));
+  const paths = browserSetupProtectedPaths(attempt);
+  await mkdir(paths[0], { mode: 0o700 });
+  for (const path of [attempt, `${attempt}.lock`, `${attempt}.0123456789abcdef.tmp`])
+    await writeFile(path, 'private setup state', { mode: 0o600 });
   const fake = fakeManager();
   const sandbox = new NativeSrtWorkspaceCommandSandbox({ workspaceRoot: workspace, protectedPaths: paths, manager: fake.manager });
   t.after(() => sandbox.close());

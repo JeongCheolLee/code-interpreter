@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { createBridgeIdentity } from './identity.js';
 import { browserSetupRequestHash, verifyBrowserSetupProof, verifyEnrollmentRedemption } from './browser-enrollment-protocol.js';
 import type { BrowserSetupRequest, BrowserSetupProof } from './browser-enrollment-protocol.js';
-import { browserSetupAttemptPath, loadBrowserSetupAttempt, setupBrowserWorker, setupInstanceUrl, cancelBrowserSetup } from './browser-setup.js';
+import { browserSetupAttemptPath, browserSetupProtectedPaths, loadBrowserSetupAttempt, setupBrowserWorker, setupInstanceUrl, cancelBrowserSetup } from './browser-setup.js';
 import type { BrowserSetupOptions } from './browser-setup.js';
 import { loadBridgeIdentity, saveBridgeIdentity, savePrivateJson } from './storage.js';
 import { loadWorkerProfile } from './worker-profile.js';
@@ -100,6 +102,61 @@ for (const boundary of ['start', 'complete'] as const) test(`lost ${boundary} re
   assert.deepEqual(after?.request, before.request);
   assert.equal(after?.privateKey, before.privateKey);
   assert.equal(f.counts().startCalls, 2);
+});
+
+test('SIGKILL during journal publish preserves the attempt and contains the secret temporary after completion', { timeout: 10_000 }, async t => {
+  const f = await fixture(t);
+  f.loseComplete();
+  await assert.rejects(setupBrowserWorker(f.options, { fetchImpl: f.fetchImpl, pollIntervalMs: 0 }), /lost/);
+  const before = (await loadBrowserSetupAttempt(f.options.profilePath!))!;
+  const attempt = browserSetupAttemptPath(f.options.profilePath!);
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', `
+    import fs from 'node:fs/promises';
+    import { syncBuiltinESMExports } from 'node:module';
+    const rename = fs.rename;
+    fs.rename = async (from, to) => {
+      if (to === ${JSON.stringify(attempt)}) {
+        process.send('journal-written');
+        await new Promise(resolve => setTimeout(resolve, 60_000));
+      }
+      return rename(from, to);
+    };
+    syncBuiltinESMExports();
+    const { savePrivateJson } = await import(${JSON.stringify(new URL('./storage.js', import.meta.url).href)});
+    await savePrivateJson(${JSON.stringify(attempt)}, JSON.parse(await fs.readFile(${JSON.stringify(attempt)}, 'utf8')));
+  `], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+  let stderr = '';
+  child.stderr!.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-4096); });
+  const closed = once(child, 'close');
+  t.after(async () => { child.kill('SIGKILL'); await closed; });
+  await Promise.race([
+    once(child, 'message', { signal: t.signal }).then(([message]) => assert.equal(message, 'journal-written')),
+    closed.then(() => { throw new Error(`Journal writer exited before the crash boundary: ${stderr}`); }),
+  ]);
+  child.kill('SIGKILL');
+  assert.deepEqual(await closed, [null, 'SIGKILL']);
+  const directory = dirname(attempt);
+  const orphanName = (await readdir(directory)).find(name => /^attempt\.json\.[a-f0-9]{16}\.tmp$/.test(name));
+  assert.ok(orphanName, 'real atomic writer left its secret generation when killed before rename');
+  const orphan = join(directory, orphanName);
+  const crashCopy = JSON.parse(await readFile(orphan, 'utf8'));
+  assert.equal(crashCopy.privateKey, before.privateKey);
+  assert.deepEqual(browserSetupProtectedPaths(attempt), [directory]);
+  const saved = await setupBrowserWorker(f.options, { fetchImpl: f.fetchImpl, pollIntervalMs: 0 });
+  const identity = await loadBridgeIdentity(saved.profile.identityPath);
+  assert.equal(identity.privateKey, before.privateKey);
+  assert.equal(identity.setupAttemptPath, attempt);
+  assert.deepEqual((await loadBrowserSetupAttempt(saved.profilePath))?.request, before.request);
+  assert.equal(JSON.parse(await readFile(attempt, 'utf8')).privateKey, undefined);
+  assert.ok((await stat(orphan)).isFile(), 'crash leftovers stay inside the denied namespace after final-receipt scrubbing');
+});
+
+test('an older draft journal is never silently replaced by a different key or attempt', async t => {
+  const f = await fixture(t);
+  const oldPath = `${f.options.profilePath}.setup.json`;
+  await writeFile(oldPath, 'preserve the existing draft key', { mode: 0o600 });
+  await assert.rejects(setupBrowserWorker(f.options, { fetchImpl: async () => { assert.fail('no remote allocation'); } }), /older draft setup journal/);
+  assert.equal(await readFile(oldPath, 'utf8'), 'preserve the existing draft key');
 });
 
 test('local profile failure after enrollment resumes without remote enrollment effects', async t => {

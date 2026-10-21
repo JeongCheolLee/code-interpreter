@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { readdir, realpath, stat } from 'node:fs/promises';
+import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve, relative, isAbsolute, sep } from 'node:path';
 
 import { pairBridgeWorker } from './pairing.js';
 import { runSetupCommand } from './setup-cli.js';
 import { browserSetupProtectedPaths } from './browser-setup.js';
+import { assertPrivateStorageAncestors } from './private-storage.js';
 import { profileRunConfiguration } from './setup.js';
 import { assertWorkerProfileIsolation } from './worker-profile.js';
 import type { WorkerProfile } from './worker-profile.js';
@@ -852,13 +853,18 @@ async function run(
       }),
     ]),
   );
-  if (pairedIdentity?.setupAttemptPath) {
-    const receipt = await stat(pairedIdentity.setupAttemptPath).catch((error: NodeJS.ErrnoException) => {
+  for (const path of setupProtectedPaths) {
+    const namespace = await lstat(path).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return undefined;
       throw error;
     });
-    if (receipt) for (const root of roots)
-      await assertWorkerProfileIsolation(pairedIdentity.setupAttemptPath, identityPath!, root.root);
+    if (!namespace) continue;
+    if (!namespace.isDirectory() || namespace.isSymbolicLink())
+      throw new Error('Setup journal namespace must be a private directory, not a symlink');
+    const sourceParents = await assertPrivateStorageAncestors(path);
+    await assertEnvironmentDefinitionsOutsideRoots([{
+      path, sourceParents, definition: { name: 'setup-state', root: path }, fingerprint: '',
+    }], roots);
   }
   const preparationDirectory = join(dirname(identityPath ?? defaultBridgeIdentityPath(workerId)), 'environment-preparation');
   if (environments.some(environment => environment.definition.setup?.reuse)) {

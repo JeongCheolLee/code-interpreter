@@ -1,6 +1,6 @@
 import { createPrivateKey, createPublicKey, randomBytes } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { createBridgeIdentity } from './identity.js';
@@ -21,6 +21,7 @@ import { withProcessLock } from './process-lock.js';
 import {
   assertIdentityPathIsPrivate,
   loadBridgeIdentity,
+  ensurePrivateWorkspaceDirectory,
   readPrivateJson,
   saveBridgeIdentity,
   savePrivateJson,
@@ -88,14 +89,25 @@ export function setupInstanceUrl(value: string): string {
 }
 
 export function browserSetupAttemptPath(profilePath: string): string {
-  return `${resolve(profilePath)}.setup.json`;
+  return join(`${resolve(profilePath)}.setup`, 'attempt.json');
 }
 
 export function browserSetupProtectedPaths(attemptPath: string | undefined): string[] {
-  return attemptPath ? [attemptPath, `${attemptPath}.lock`] : [];
+  if (attemptPath === undefined) return [];
+  const directory = dirname(attemptPath);
+  if (basename(attemptPath) !== 'attempt.json' || !directory.endsWith('.setup'))
+    throw new Error('Unsupported setup journal location; preserve the original identity and journal');
+  // Directory protection includes atomic-write temporaries, even after SIGKILL.
+  return [directory];
 }
 
 export async function loadBrowserSetupAttempt(profilePath: string): Promise<BrowserSetupAttempt | undefined> {
+  // The earlier, unreleased draft stored journals beside profiles. Never rekey them silently.
+  const previous = await lstat(`${resolve(profilePath)}.setup.json`).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return undefined;
+    throw error;
+  });
+  if (previous) throw new Error('An older draft setup journal exists; preserve its key and attempt instead of starting a new enrollment');
   let value: unknown;
   try { value = await readPrivateJson(browserSetupAttemptPath(profilePath), 32 * 1024); }
   catch (error) {
@@ -234,6 +246,7 @@ export async function setupBrowserWorker(options: BrowserSetupOptions, dependenc
   const instance = setupInstanceUrl(options.instance);
   const profilePath = resolve(options.profilePath ?? defaultWorkerProfilePath());
   const attemptPath = browserSetupAttemptPath(profilePath);
+  await ensurePrivateWorkspaceDirectory(dirname(attemptPath));
   // This stable inode is deliberately retained. Removing an advisory lock can split its holders.
   await assertIdentityPathIsPrivate(`${attemptPath}.lock`);
   return withProcessLock(`${attemptPath}.lock`, async () => {
