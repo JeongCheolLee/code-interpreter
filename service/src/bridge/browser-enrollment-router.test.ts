@@ -142,6 +142,10 @@ describe('browser enrollment HTTP boundary', () => {
     expect(issued.status).toBe(200);
     expect(await issued.json()).toEqual(approval);
     expect((await post(`${second}/enrollments`, approval)).status).toBe(200);
+    const { signature: _pendingSignature, ...pendingRequest } = proof(approval);
+    const pending = await post(`${second}/enrollments/status`, pendingRequest);
+    expect(pending.status).toBe(200);
+    expect(await pending.json()).toEqual({ protocolVersion: 1, status: 'pending', workerId: approval.workerId });
     expect((await post(`${second}/enrollments`, { ...approval, publicKey: outsider.publicKey })).status).toBe(409);
     expect((await post(`${first}/enrollments/redeem`, { ...proof(approval), signature: '?' })).status).toBe(400);
     expect((await post(`${first}/enrollments/redeem`, { ...proof(approval), operation: 'setup.complete' })).status).toBe(400);
@@ -159,7 +163,9 @@ describe('browser enrollment HTTP boundary', () => {
     expect((await post(`${second}/enrollments/status`, { ...statusRequest, requestHash: 'f'.repeat(64) })).status).toBe(409);
     expect((await post(`${first}/workers/${approval.workerId}/revoke`, {})).status).toBe(200);
     expect((await post(`${second}/enrollments/redeem`, proof(approval))).status).toBe(409);
-    expect((await post(`${second}/enrollments/status`, statusRequest)).status).toBe(409);
+    const revoked = await post(`${second}/enrollments/status`, statusRequest);
+    expect(revoked.status).toBe(200);
+    expect(await revoked.json()).toEqual({ protocolVersion: 1, status: 'revoked', workerId: approval.workerId });
   });
 
   test('shares a connection-peer budget across replicas and ignores spoofed forwarded IPs', async () => {

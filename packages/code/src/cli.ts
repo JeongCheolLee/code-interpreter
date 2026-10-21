@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve, relative, isAbsolute, sep } from 'nod
 
 import { pairBridgeWorker } from './pairing.js';
 import { runSetupCommand } from './setup-cli.js';
+import { browserSetupProtectedPaths } from './browser-setup.js';
 import { profileRunConfiguration } from './setup.js';
 import { assertWorkerProfileIsolation } from './worker-profile.js';
 import type { WorkerProfile } from './worker-profile.js';
@@ -1101,6 +1102,7 @@ async function run(
     protectedPaths: [
       identityPath,
       savedProfile?.path,
+      ...(savedProfile ? browserSetupProtectedPaths(savedProfile.path) : []),
       ...(environments.some(environment => environment.definition.setup?.reuse) ? [preparationDirectory] : []),
       ...snapshotStores.map(store => store.store),
             ...environments.map(environment => environment.path),

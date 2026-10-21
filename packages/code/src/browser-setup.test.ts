@@ -12,6 +12,7 @@ import type { BrowserSetupOptions } from './browser-setup.js';
 import { loadBridgeIdentity, saveBridgeIdentity, savePrivateJson } from './storage.js';
 import { loadWorkerProfile } from './worker-profile.js';
 import { parseSetupArguments } from './setup-cli.js';
+import { runBrowserSetupCommand } from './browser-setup-cli.js';
 
 async function fixture(t: test.TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'browser-setup-'));
@@ -184,6 +185,25 @@ test('cancellation is signed by the persisted machine key', async t => {
   f.loseStart();
   await assert.rejects(setupBrowserWorker(f.options, { fetchImpl: f.fetchImpl }), /lost/);
   await cancelBrowserSetup(f.options.profilePath!, undefined, f.fetchImpl);
+});
+
+test('cancellation after enrollment saves the profile but prevents requested foreground startup', { timeout: 5000 }, async t => {
+  const f = await fixture(t);
+  const controller = new AbortController();
+  t.mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const response = await f.fetchImpl(input, init);
+    if (String(input).endsWith('/complete')) controller.abort(new Error('owner cancelled startup'));
+    return response;
+  });
+  await assert.rejects(runBrowserSetupCommand(new Map<string, string | true>([
+    ['--instance', f.options.instance], ['--machine-name', f.options.machineName],
+    ['--profile', f.options.profilePath!], ['--default-workspace', true], ['--start', true],
+  ]), {
+    interactive: false, signal: controller.signal,
+    ask: async () => { assert.fail('no prompt expected'); },
+    yesNo: async () => { assert.fail('no prompt expected'); },
+  }), /owner cancelled startup/);
+  assert.ok(await loadWorkerProfile(f.options.profilePath!));
 });
 
 test('browser flags preserve manual automation without accepting mixed credentials', () => {

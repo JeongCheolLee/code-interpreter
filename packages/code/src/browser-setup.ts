@@ -90,6 +90,11 @@ export function browserSetupAttemptPath(profilePath: string): string {
   return `${resolve(profilePath)}.setup.json`;
 }
 
+export function browserSetupProtectedPaths(profilePath: string): string[] {
+  const attemptPath = browserSetupAttemptPath(profilePath);
+  return [attemptPath, `${attemptPath}.lock`];
+}
+
 export async function loadBrowserSetupAttempt(profilePath: string): Promise<BrowserSetupAttempt | undefined> {
   let value: unknown;
   try { value = await readPrivateJson(browserSetupAttemptPath(profilePath), 32 * 1024); }

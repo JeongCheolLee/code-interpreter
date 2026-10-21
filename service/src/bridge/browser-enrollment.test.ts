@@ -208,7 +208,7 @@ describe('Redis browser enrollment ownership', () => {
     await workers.register({
       protocolVersion: 1, workerId, incarnationId: 'browser-test-incarnation',
       identityId: auth.identityId, credentialId: auth.credentialId, binding: approved.binding,
-      capabilities: { statefulWorkspace: false, runtimes: [] },
+      capabilities: { statefulWorkspace: false, runtimes: [], sandboxProfile: 'native-srt' },
     }, auth);
     expect(await replica.issueBrowserEnrollment(approved)).toEqual(approved);
     expect(await replica.redeemBrowserEnrollment(redemption(approved), adminToken)).toEqual(credential);
@@ -280,6 +280,8 @@ describe('Redis browser enrollment ownership', () => {
     await new Promise(resolve => setTimeout(resolve, 2_100));
     await expect(replica.issueBrowserEnrollment(approved)).rejects.toMatchObject({ code: 'ENROLLMENT_INVALID' });
     await expect(replica.redeemBrowserEnrollment(redemption(approved), adminToken)).rejects.toMatchObject({ code: 'ENROLLMENT_INVALID' });
+    const { signature: _signature, ...statusRequest } = redemption(approved);
+    expect(await replica.browserEnrollmentStatus(statusRequest)).toMatchObject({ status: 'revoked' });
     await expect(replica.issueBrowserEnrollment({ ...approved, workerId: 'replacement-worker', expiresAt: new Date(Date.now() + 60_000).toISOString() })).rejects.toMatchObject({ code: 'ENROLLMENT_INVALID' });
   });
 
@@ -290,6 +292,7 @@ describe('Redis browser enrollment ownership', () => {
     const original = await replica.redeemBrowserEnrollment(redemption(approved), adminToken);
     const originalAuth = await replica.authorize(authorized(original));
     await new Promise(resolve => setTimeout(resolve, 2_100));
+    expect(await store().redeemBrowserEnrollment(redemption(approved), adminToken)).toEqual(original);
     await redis.del(
       `codeapi:bridge:v1:identity:${workerId}`, `codeapi:bridge:v1:stable-identity:${workerId}`,
       `codeapi:bridge:v1:credential:${createHash('sha256').update(original.credential).digest('hex')}`,
@@ -305,9 +308,9 @@ describe('Redis browser enrollment ownership', () => {
     const challenge = await restarted.createRecoveryChallenge(workerId, start, signBridgeRecoveryStart(identity.privateKey, start));
     const recovered = await restarted.recoverCredential(workerId, challenge, signBridgeRecovery(identity.privateKey, challenge));
     expect(await restarted.authorize(authorized(recovered))).toMatchObject({ identityId: originalAuth.identityId, binding: approved.binding });
-    await expect(restarted.redeemBrowserEnrollment(redemption(approved), adminToken)).rejects.toMatchObject({ code: 'ENROLLMENT_INVALID' });
     await restarted.revoke(workerId);
-    await expect(restarted.browserEnrollmentStatus(statusRequest)).rejects.toMatchObject({ code: 'ENROLLMENT_INVALID' });
+    expect(await restarted.browserEnrollmentStatus(statusRequest)).toMatchObject({ status: 'revoked', workerId });
+    await expect(restarted.redeemBrowserEnrollment(redemption(approved), adminToken)).rejects.toMatchObject({ code: 'ENROLLMENT_INVALID' });
   });
 
   test('revocation fences approval, completion, exact replay and recovery without clearing quarantine', async () => {
@@ -332,6 +335,21 @@ describe('Redis browser enrollment ownership', () => {
     expect(credential.workerId).toBe(other.workerId);
   });
 
+  test('status distinguishes pending, completed, revoked and unknown exact contracts without issuing credentials', async () => {
+    const replica = store();
+    const approved = approval();
+    const { signature: _signature, ...statusRequest } = redemption(approved);
+    await expect(replica.browserEnrollmentStatus(statusRequest)).rejects.toMatchObject({ code: 'ENROLLMENT_INVALID' });
+    await replica.issueBrowserEnrollment(approved);
+    expect(await store().browserEnrollmentStatus(statusRequest)).toEqual({ protocolVersion: 1, status: 'pending', workerId });
+    expect(await redis.keys('codeapi:bridge:v1:credential:*')).toHaveLength(0);
+    await expect(replica.browserEnrollmentStatus({ ...statusRequest, workerId: 'different-worker' })).rejects.toMatchObject({ code: 'ENROLLMENT_INVALID' });
+    await replica.revoke(workerId);
+    expect(await store().browserEnrollmentStatus(statusRequest)).toEqual({ protocolVersion: 1, status: 'revoked', workerId });
+    await expect(replica.issueBrowserEnrollment(approved)).rejects.toMatchObject({ code: 'ENROLLMENT_INVALID' });
+    expect(await redis.keys('codeapi:bridge:v1:credential:*')).toHaveLength(0);
+  });
+
   test('manual issue supersedes only the pending fence and cannot be undone by a retry', async () => {
     const replica = store();
     const approved = approval();
@@ -342,6 +360,22 @@ describe('Redis browser enrollment ownership', () => {
     const issued = await replica.redeem({ workerId, code: manual.code, publicKey: outsider.publicKey });
     await expect(replica.issueBrowserEnrollment(approval())).rejects.toMatchObject({ code: 'ENROLLMENT_INVALID' });
     expect(issued.workerId).toBe(workerId);
+  });
+
+  for (const afterScanWindow of [false, true]) test(`unindexed legacy codes cannot supersede browser approval ${afterScanWindow ? 'after' : 'during'} migration`, async () => {
+    const replica = store();
+    const approved = approval();
+    const legacyCode = randomBytes(24).toString('base64url');
+    const legacyKey = `codeapi:bridge:v1:pairing:${createHash('sha256').update(legacyCode).digest('hex')}`;
+    await redis.set(legacyKey, JSON.stringify({ workerId, expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      binding: { tenantId: 'other-tenant', principal: { type: 'user', id: 'other-owner' } } }), 'EX', 60);
+    if (afterScanWindow) await redis.set('codeapi:bridge:v1:migration:legacy-pairing-scan-until', String(Date.now() - 1));
+    await replica.issueBrowserEnrollment(approved);
+    expect(await redis.get(`codeapi:bridge:v1:pairing-generation:${workerId}`)).toBe('0');
+    if (!afterScanWindow) expect(await redis.get(legacyKey)).toBeNull();
+    await expect(replica.redeem({ workerId, code: legacyCode, publicKey: outsider.publicKey })).rejects.toMatchObject({ code: 'PAIRING_INVALID' });
+    const credential = await replica.redeemBrowserEnrollment(redemption(approved), adminToken);
+    expect(await replica.authorize(authorized(credential))).toMatchObject({ workerId, binding: approved.binding });
   });
 
   test('cannot replace a preexisting manual enrollment or pending pairing', async () => {

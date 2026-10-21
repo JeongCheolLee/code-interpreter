@@ -80,8 +80,10 @@ export async function runBrowserSetupCommand(
     },
   });
   process.stdout.write('\nMachine enrolled. Profile saved. It is not connected or ready until the worker starts and readiness is confirmed.\n');
+  prompts.signal.throwIfAborted();
   const start = options.has('--start') || (prompts.interactive && await prompts.yesNo('Start the worker in the foreground now?'));
   if (start) {
+    prompts.signal.throwIfAborted();
     process.stdout.write('Starting the saved profile in the foreground. Stop with Ctrl-C.\n');
     await new Promise<void>((resolve, reject) => {
       const child = spawn(process.execPath, [fileURLToPath(new URL('./cli.js', import.meta.url)), 'run', '--profile', profilePath], { stdio: 'inherit' });
