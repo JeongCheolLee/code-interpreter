@@ -9,15 +9,30 @@ import {
 } from './setup.js';
 import { defaultWorkerProfilePath } from './worker-profile.js';
 import { isValidBridgeWorkerId } from './protocol.js';
+import { runBrowserSetupCommand } from './browser-setup-cli.js';
 
 export const SETUP_HELP = `Usage: librechat-code setup [options]
 
+Enroll with browser approval:
+  librechat-code setup --instance https://chat.example.com
+
+The browser uses LibreChat's normal login, including configured OAuth/OIDC.
+SSH/headless machines display a URL and matching verification code. No inbound
+listener or CLI identity-provider integration is needed. Interrupted setup
+resumes the same saved key and attempt. Never delete it to retry an enrollment.
+
+Existing manual pairing:
 Create a private worker profile using a one-time pairing from LibreChat.
 Open Settings > Code Environments in LibreChat to add the machine first.
 Use its Code API URL, worker ID, and pairing code. This command does not
 sign in to LibreChat or bypass its enrollment policy.
 
-  --url <url>               Code API URL, including its /v1 prefix
+  --instance <url>          LibreChat instance URL for browser approval
+  --machine-name <name>     Display name (default: host name)
+  --no-browser             Display approval instructions without opening a browser
+  --start                  Start the saved worker in the foreground after setup
+  --cancel                 Cancel this profile's pending browser setup
+  --url <url>               Manual Code API URL, including its /v1 prefix
   --worker-id <id>          Worker ID supplied by LibreChat
   --worker-dir <directory>  Expose one existing project directory
   --default-workspace      Create a private workspace when the worker starts
@@ -35,6 +50,8 @@ start a background service, or change the restricted command policy.
 `;
 
 const VALUE_FLAGS = new Set([
+  '--instance',
+  '--machine-name',
   '--url',
   '--worker-id',
   '--worker-dir',
@@ -42,6 +59,9 @@ const VALUE_FLAGS = new Set([
   '--identity',
 ]);
 const BOOLEAN_FLAGS = new Set([
+  '--no-browser',
+  '--start',
+  '--cancel',
   '--default-workspace',
   '--allow-workspace-writes',
   '--allow-workspace-commands',
@@ -86,8 +106,15 @@ export function parseSetupArguments(
   if (options.has('--worker-dir') && options.has('--default-workspace')) {
     throw new Error('Choose --worker-dir or --default-workspace, not both');
   }
+  if (options.has('--instance') && ['--url', '--worker-id', '--code-stdin'].some(flag => options.has(flag)))
+    throw new Error('Browser approval cannot be combined with manual pairing options');
+  if (!options.has('--instance') && ['--machine-name', '--no-browser', '--start', '--cancel'].some(flag => options.has(flag)))
+    throw new Error('Browser setup options require --instance');
+  if (options.has('--non-interactive') && options.has('--instance') && !options.has('--cancel') &&
+      !options.has('--worker-dir') && !options.has('--default-workspace'))
+    throw new Error('Non-interactive browser setup requires --worker-dir or --default-workspace');
   if (
-    options.has('--non-interactive') &&
+    options.has('--non-interactive') && !options.has('--instance') &&
     (!options.has('--url') ||
       !options.has('--worker-id') ||
       !options.has('--code-stdin') ||
@@ -177,6 +204,10 @@ export async function runSetupCommand(args: string[]): Promise<void> {
     }
   };
   try {
+    if (options.has('--instance')) {
+      await runBrowserSetupCommand(options, { interactive, ask, yesNo, signal: controller.signal });
+      return;
+    }
     if (interactive)
       process.stdout.write(
         'Connect a machine using the pairing supplied by LibreChat.\nOnly selected folders and permissions will be exposed.\n\n',

@@ -1491,8 +1491,14 @@ async function run(
     throw error;
   }
   worktreeRetirementScheduler?.start();
+  let readinessReported = false;
   try {
     const worker = new BridgeWorker({
+      onReady: () => {
+        if (readinessReported) return;
+        readinessReported = true;
+        process.stdout.write('librechat-code: connected and ready\n');
+      },
       instructionDescriptors: () => localWorkspaceTools?.instructionDescriptors() ?? Promise.resolve(undefined),
       codeApiUrl,
       token: configuredToken,
@@ -1778,7 +1784,7 @@ async function main(): Promise<void> {
   if (args.length === 1 && (args[0] === '--help' || args[0] === 'help')) {
     process.stdout.write(`Usage: librechat-code <command>
 
-  setup             Guided pairing and private profile setup
+  setup --instance <url>  Browser-approved enrollment and private profile setup
   run [--profile <file>]  Start a saved profile or existing worker configuration
   pair <url> <code> --worker-id <id>  Existing one-time pairing flow
   projects --root <directory>       Inspect local Git projects

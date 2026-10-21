@@ -98,6 +98,8 @@ export interface BridgeWorkerOptions {
   onRegistered?: (
     registration: BridgeWorkerRegistrationResponse,
   ) => void | Promise<void>;
+  /** Called only after registration and required readiness confirmation succeed. */
+  onReady?: () => void | Promise<void>;
   incarnationId?: string;
 }
 
@@ -840,6 +842,7 @@ export class BridgeWorker {
       await this.confirmReady(registration, signal);
     }
     this.lastRegisteredAtMs = registrationStartedAtMs;
+    if (!this.maintenanceOnly) await this.options.onReady?.();
     return registration;
   }
 
@@ -856,7 +859,7 @@ export class BridgeWorker {
         'Code API does not support explicit worker readiness confirmation',
       );
     }
-    await this.timedRequest(
+    const ready = await this.timedRequest<{ ready?: boolean }>(
       `${this.codeApiUrl}${bridgeWorkerPath(this.options.workerId)}/ready`,
       {
         protocolVersion: BRIDGE_PROTOCOL_VERSION,
@@ -870,6 +873,9 @@ export class BridgeWorker {
       ),
       signal,
     );
+    if (ready.ready !== true) {
+      throw new BridgeProtocolError('Code API did not confirm worker readiness');
+    }
   }
 
   async resetWorkspace(
