@@ -438,6 +438,7 @@ async function run(
   const pairedIdentity = identityPath
     ? await loadBridgeIdentity(identityPath)
     : undefined;
+  const setupProtectedPaths = browserSetupProtectedPaths(pairedIdentity?.setupAttemptPath);
   const workerId = required(
     'LIBRECHAT_CODE_WORKER_ID',
     configuredWorkerId ?? pairedIdentity?.workerId,
@@ -851,6 +852,14 @@ async function run(
       }),
     ]),
   );
+  if (pairedIdentity?.setupAttemptPath) {
+    const receipt = await stat(pairedIdentity.setupAttemptPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (receipt) for (const root of roots)
+      await assertWorkerProfileIsolation(pairedIdentity.setupAttemptPath, identityPath!, root.root);
+  }
   const preparationDirectory = join(dirname(identityPath ?? defaultBridgeIdentityPath(workerId)), 'environment-preparation');
   if (environments.some(environment => environment.definition.setup?.reuse)) {
     const sourceParents = await prepareEnvironmentPreparationDirectory(preparationDirectory);
@@ -866,13 +875,13 @@ async function run(
     definition: { name: 'shared-resource', root: resource.path }, fingerprint: '',
   })));
   await assertEnvironmentResourceIsolation(environments.flatMap(environment => environment.resources ?? []), roots.map(root => root.root), [
-    identityPath, preparationDirectory, github.privateKeyPath,
+    identityPath, ...setupProtectedPaths, preparationDirectory, github.privateKeyPath,
     ...environments.map(environment => environment.path), ...rootQuarantinePaths.values(),
   ].filter((path): path is string => path != null));
   await assertEnvironmentDefinitionsOutsideRoots(resourceRoots, roots);
   const snapshotStores = environments.flatMap(environment => environment.snapshotStore ? [environment.snapshotStore] : []);
   await assertEnvironmentResourceIsolation(snapshotStores.map(store => ({ kind: 'npm-cache' as const, path: store.store, access: 'read-only' as const })), roots.map(root => root.root), [
-    identityPath, preparationDirectory, github.privateKeyPath, ...environments.map(environment => environment.path),
+    identityPath, ...setupProtectedPaths, preparationDirectory, github.privateKeyPath, ...environments.map(environment => environment.path),
     ...rootQuarantinePaths.values(), ...environments.flatMap(environment => (environment.resources ?? []).map(resource => resource.path)),
   ].filter((path): path is string => path != null));
   await assertEnvironmentDefinitionsOutsideRoots(snapshotStores.map(store => ({ path: store.store, sourceParents: store.controlPaths,
@@ -1102,7 +1111,7 @@ async function run(
     protectedPaths: [
       identityPath,
       savedProfile?.path,
-      ...(savedProfile ? browserSetupProtectedPaths(savedProfile.path) : []),
+      ...setupProtectedPaths,
       ...(environments.some(environment => environment.definition.setup?.reuse) ? [preparationDirectory] : []),
       ...snapshotStores.map(store => store.store),
             ...environments.map(environment => environment.path),

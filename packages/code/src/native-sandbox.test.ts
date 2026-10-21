@@ -1317,7 +1317,7 @@ test('protects retained browser setup keys outside home from command reads and w
   const state = join(root, 'state');
   await mkdir(workspace);
   await mkdir(state);
-  const paths = browserSetupProtectedPaths(join(state, 'profile.json'));
+  const paths = browserSetupProtectedPaths(join(state, 'profile.json.setup.json'));
   for (const path of paths) await writeFile(path, 'private setup state', { mode: 0o600 });
   const fake = fakeManager();
   const sandbox = new NativeSrtWorkspaceCommandSandbox({ workspaceRoot: workspace, protectedPaths: paths, manager: fake.manager });

@@ -5,7 +5,7 @@ import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
 import { browserSetupProtectedPaths } from './browser-setup.js';
 
 test('browser setup credential files are in the effective SDK read-deny policy outside home', async t => {
-  const paths = browserSetupProtectedPaths('/srv/code-state/profile.json');
+  const paths = browserSetupProtectedPaths('/srv/code-state/profile.json.setup.json');
   const previous = SandboxManager.getConfig();
   t.after(async () => {
     await SandboxManager.reset();

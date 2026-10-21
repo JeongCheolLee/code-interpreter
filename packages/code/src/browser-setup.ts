@@ -43,6 +43,7 @@ export interface BrowserSetupAttempt {
   profile: WorkerProfile;
   approval?: BrowserSetupApproval;
   identity?: PairedBridgeWorkerIdentity;
+  completed?: true;
 }
 
 export type BrowserSetupApproval = EnrollmentRedemption & { codeApiUrl: string };
@@ -90,9 +91,8 @@ export function browserSetupAttemptPath(profilePath: string): string {
   return `${resolve(profilePath)}.setup.json`;
 }
 
-export function browserSetupProtectedPaths(profilePath: string): string[] {
-  const attemptPath = browserSetupAttemptPath(profilePath);
-  return [attemptPath, `${attemptPath}.lock`];
+export function browserSetupProtectedPaths(attemptPath: string | undefined): string[] {
+  return attemptPath ? [attemptPath, `${attemptPath}.lock`] : [];
 }
 
 export async function loadBrowserSetupAttempt(profilePath: string): Promise<BrowserSetupAttempt | undefined> {
@@ -102,10 +102,15 @@ export async function loadBrowserSetupAttempt(profilePath: string): Promise<Brow
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
-  if (!record(value) || value.version !== 1 || !record(value.request) || !record(value.profile) || typeof value.privateKey !== 'string')
+  if (!record(value) || value.version !== 1 || !record(value.request) || !record(value.profile))
     throw new Error('Invalid saved setup attempt; preserve it and choose another profile, do not replace its machine key');
   const attempt = value as unknown as BrowserSetupAttempt;
   workerProfileArguments(attempt.profile);
+  if (attempt.completed === true) {
+    attempt.identity = await loadBridgeIdentity(attempt.profile.identityPath);
+    attempt.privateKey = attempt.identity.privateKey;
+  }
+  if (typeof attempt.privateKey !== 'string') throw new Error('Saved setup key is unavailable; preserve the original identity');
   if (setupInstanceUrl(attempt.request.instance) !== attempt.request.instance ||
       createPublicKey(createPrivateKey(attempt.privateKey)).export({ type: 'spki', format: 'pem' }) !== attempt.request.publicKey)
     throw new Error('Saved setup key does not match its request');
@@ -218,7 +223,7 @@ async function assertEmptyOrMatching(path: string, expected: unknown, load: (pat
 }
 
 function sameEnrolledKey(left: unknown, right: unknown): boolean {
-  return record(left) && record(right) && ['protocolVersion', 'workerId', 'codeApiUrl', 'publicKey', 'privateKey']
+  return record(left) && record(right) && ['protocolVersion', 'workerId', 'codeApiUrl', 'publicKey', 'privateKey', 'setupAttemptPath']
     .every(key => left[key] === right[key]);
 }
 
@@ -272,6 +277,10 @@ export async function setupBrowserWorker(options: BrowserSetupOptions, dependenc
       const publish = async () => {
         if (!await assertEmptyOrMatching(profile.identityPath, attempt!.identity, loadBridgeIdentity, sameEnrolledKey))
           await (dependencies.saveIdentity ?? saveBridgeIdentity)(profile.identityPath, attempt!.identity!);
+        if (!attempt!.completed) {
+          await savePrivateJson(attemptPath, { version: 1, request: attempt!.request, profile, approval: attempt!.approval, completed: true });
+          attempt!.completed = true;
+        }
         const profileSaved = await assertEmptyOrMatching(profilePath, profile, loadWorkerProfile);
         try { if (!profileSaved) await (dependencies.saveProfile ?? saveWorkerProfile)(profilePath, profile); }
         catch { throw new Error(`Machine enrolled and identity saved, but profile persistence failed. Rerun setup with this same profile to resume: ${profilePath}`); }
@@ -287,7 +296,7 @@ export async function setupBrowserWorker(options: BrowserSetupOptions, dependenc
           signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
         });
         attempt.identity = { ...credential, codeApiUrl: attempt.approval.codeApiUrl,
-          publicKey: attempt.request.publicKey, privateKey: attempt.privateKey };
+          publicKey: attempt.request.publicKey, privateKey: attempt.privateKey, setupAttemptPath: attemptPath };
         await persist();
         return await publish();
       }
@@ -309,7 +318,7 @@ export async function setupBrowserWorker(options: BrowserSetupOptions, dependenc
               credential.credential.length < 32 || credential.credential.length > 4096 ||
               !Number.isFinite(Date.parse(credential.expiresAt))) throw new Error('LibreChat returned an invalid enrollment credential');
           attempt.identity = { protocolVersion: 1, workerId: credential.workerId, credential: credential.credential, expiresAt: credential.expiresAt,
-            codeApiUrl: attempt.approval.codeApiUrl, publicKey: attempt.request.publicKey, privateKey: attempt.privateKey };
+            codeApiUrl: attempt.approval.codeApiUrl, publicKey: attempt.request.publicKey, privateKey: attempt.privateKey, setupAttemptPath: attemptPath };
           // Keep replayable local state even if either final file cannot be published.
           await persist();
           return await publish();

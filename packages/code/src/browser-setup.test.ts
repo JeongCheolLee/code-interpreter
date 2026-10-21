@@ -82,6 +82,11 @@ test('headless setup displays URL and code and saves the existing least-privileg
   assert.equal(identity.credential, f.credential.credential);
   assert.equal((await stat(browserSetupAttemptPath(saved.profilePath))).mode & 0o777, 0o600);
   assert.ok(!(await readFile(saved.profilePath, 'utf8')).includes('PRIVATE KEY'));
+  const receipt = JSON.parse(await readFile(browserSetupAttemptPath(saved.profilePath), 'utf8'));
+  assert.equal(receipt.privateKey, undefined);
+  assert.equal(receipt.identity, undefined);
+  assert.equal(receipt.completed, true);
+  assert.equal(identity.setupAttemptPath, browserSetupAttemptPath(saved.profilePath));
 });
 
 for (const boundary of ['start', 'complete'] as const) test(`lost ${boundary} response resumes the identical key and attempt`, async t => {
