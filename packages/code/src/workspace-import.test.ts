@@ -123,11 +123,12 @@ test('import requests follow write_file path rules and refuse Git metadata', () 
   for (const path of [
     '../escape.bin', '/etc/passwd', 'C:/x.bin', 'a\\b.bin', 'dir/', 'dir/.', '.git', '.git/config',
     'src/.git/hooks/pre-commit', '.GIT/config', '.Git./x', 'a/.git /x', 'GIT~1/config', '.g\u200cit/config',
+    '.git::$INDEX_ALLOCATION/config', '.GIT:stream', '.git. ::$INDEX_ALLOCATION/hooks/x', 'git~1::$INDEX_ALLOCATION/x',
   ]) {
     assert.equal(isWorkspaceImportFilePath(path), false, path);
     assert.equal(isWorkspaceToolRequest(importRequest(bytes, { path })), false, path);
   }
-  for (const path of ['archive.zip', 'uploads/photo.png', '.gitignore', '.github/workflow.yml', 'docs/.gitkeep']) {
+  for (const path of ['archive.zip', 'uploads/photo.png', '.gitignore', '.github/workflow.yml', 'docs/.gitkeep', 'notes/10:30 standup.md']) {
     assert.equal(isWorkspaceImportFilePath(path), true, path);
   }
   for (const invalid of [

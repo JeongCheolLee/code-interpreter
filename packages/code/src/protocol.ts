@@ -1371,10 +1371,12 @@ export function isSafePortableRelativePath(value: unknown): value is string {
 /**
  * Whether a path segment names Git metadata on any host filesystem: case
  * folding (macOS, Windows), ignorable code points (HFS+), trailing dots and
- * spaces (Windows), and the NTFS short name all alias `.git`.
+ * spaces (Windows), NTFS stream syntax such as `.git::$INDEX_ALLOCATION`, and
+ * the NTFS short name all alias `.git`.
  */
 function isDotGitPathSegment(segment: string): boolean {
   const folded = segment
+    .split(':', 1)[0]!
     .toLowerCase()
     .replace(/\p{Default_Ignorable_Code_Point}/gu, '')
     .replace(/[. ]+$/, '');
