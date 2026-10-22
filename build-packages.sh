@@ -273,7 +273,7 @@ SCRIPT_DIR=\"\$(cd \"\$(dirname \"\${BASH_SOURCE[0]}\")\" && pwd)\"
 MODULE_DIR=\"\${SCRIPT_DIR}/node_modules\"
 if [ -d \"\${MODULE_DIR}\" ]; then
     if [ -L /mnt/data/node_modules ]; then
-        LINK_TARGET=\"\$(readlink /mnt/data/node_modules)\"
+        LINK_TARGET=\"\$(readlink -m /mnt/data/node_modules)\"
         if [ \"\${LINK_TARGET}\" != \"\${MODULE_DIR}\" ]; then
             case \"\${LINK_TARGET}\" in
                 \"\${SCRIPT_DIR%/*/*}/\"*/node_modules)
@@ -385,7 +385,7 @@ SCRIPT_DIR=\"\$(cd \"\$(dirname \"\${BASH_SOURCE[0]}\")\" && pwd)\"
 MODULE_DIR=\"\${SCRIPT_DIR}/node_modules\"
 if [ -d \"\${MODULE_DIR}\" ]; then
     if [ -L /mnt/data/node_modules ]; then
-        LINK_TARGET=\"\$(readlink /mnt/data/node_modules)\"
+        LINK_TARGET=\"\$(readlink -m /mnt/data/node_modules)\"
         if [ \"\${LINK_TARGET}\" != \"\${MODULE_DIR}\" ]; then
             case \"\${LINK_TARGET}\" in
                 \"\${SCRIPT_DIR%/*/*}/\"*/node_modules)

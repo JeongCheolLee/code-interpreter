@@ -131,6 +131,17 @@ for (const manager of managers) {
         });
     });
 
+    test(`${manager.name}: preserves a user link with a package-root traversal`, () => {
+        fixture((workspace, packages, modules) => {
+            const target = `${packages}/../user/node_modules`;
+            const link = path.join(workspace, 'node_modules');
+            fs.mkdirSync(path.resolve(target), { recursive: true });
+            fs.symlinkSync(target, link);
+            manager.prepare(workspace, modules);
+            expect(fs.readlinkSync(link)).toBe(target);
+        });
+    });
+
     for (const target of [
         '../user/node_modules',
         '../pkgs-other/node_modules',
