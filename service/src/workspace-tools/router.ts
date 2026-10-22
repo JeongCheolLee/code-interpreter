@@ -210,7 +210,12 @@ export function createWorkspaceToolsRouter(options: WorkspaceToolsRouterOptions)
           workerId: selection.workerId,
           requireTenantBinding: selection.explicit && (options.dynamicWorkers || selection.workerId !== options.configuredWorkerId),
           request, queueWaitMs: queueBudgetMs, executionTimeoutMs: executionBudgetMs,
-          ...(prepare == null ? {} : { prepare: async () => (await prepare()).request }),
+          ...(prepare == null || imports == null ? {} : {
+            prepare: async () => {
+              const prepared = await prepare();
+              return { request: prepared.request, release: () => imports.revoke(prepared.grantId) };
+            },
+          }),
         });
         res.status(202).json(status);
       } catch (error) {

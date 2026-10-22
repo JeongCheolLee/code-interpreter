@@ -141,13 +141,16 @@ export class HttpWorkspaceFileImporter implements WorkspaceFileImporter {
       try {
         for (;;) {
           let next: Awaited<ReturnType<typeof reader.read>>;
+          // The stall timer covers only waiting on the source, never the consumer's writes.
+          arm();
           try {
             next = await reader.read();
           } catch {
             throw failure();
+          } finally {
+            clearTimeout(timer);
           }
           if (next.done) return;
-          arm();
           yield next.value;
         }
       } finally {

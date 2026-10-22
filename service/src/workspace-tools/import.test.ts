@@ -248,9 +248,10 @@ test('a durable import fingerprints the caller request and mints its grant once'
     workspaceTools: { protocolVersion: 1, operations: ['read_file', 'import_file'], workspaces: [{ id: 'primary' }] },
   } });
   const minted: string[] = [];
+  const revoked: string[] = [];
   const url = await listen(appFor(createWorkspaceToolsRouter({
     backend: 'remote-bridge', configuredWorkerId: 'worker', dynamicWorkers: false,
-    imports: importService(redis, minted),
+    imports: importService(redis, minted, revoked),
     requests: new RedisWorkspaceRequests(redis, bridge),
     store: { async dispatchWorkspaceTool(): Promise<never> { throw new Error('durable requests never dispatch synchronously'); } },
   })));
@@ -277,7 +278,18 @@ test('a durable import fingerprints the caller request and mints its grant once'
     expect(request.source.id).not.toBe(OBJECT);
   }
 
+  // Racing submissions of one new request ID: only the adopted grant survives.
+  const raceHeaders = { 'X-LibreChat-Workspace-Request-Id': 'import-request-000002' };
+  await upload(redis, owner, SESSION, OBJECT);
+  const before = minted.length;
+  const raced = await Promise.all([0, 1].map(() => post(`${url}/workspace-tools/requests`, importBody(), raceHeaders)));
+  expect(raced.map(response => response.status)).toEqual([202, 202]);
+  const racedGrants = minted.slice(before);
+  expect(racedGrants.length).toBeGreaterThan(0);
+  expect(revoked).toHaveLength(racedGrants.length - 1);
+
+  const mintedBeforeConflict = minted.length;
   const conflict = await post(`${url}/workspace-tools/requests`, importBody({ bytes: 1 }), headers);
   expect(conflict.status).toBe(409);
-  expect(minted).toHaveLength(1);
+  expect(minted).toHaveLength(mintedBeforeConflict);
 });

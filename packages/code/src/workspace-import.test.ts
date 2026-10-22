@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -334,6 +335,50 @@ test('the staged file is verified after it is synced, not only the bytes that ar
   assert.equal(tampered.code, 'INVALID_REQUEST');
   assert.match(tampered.message, /SHA-256/);
   assert.deepEqual(await readdir(root), []);
+});
+
+test('rollback never removes a directory that replaced one the import created', async (t) => {
+  const bytes = randomBytes(32 * 1024);
+  const stub = await egressStub(t, Buffer.concat([bytes.subarray(0, 1024), Buffer.alloc(bytes.byteLength - 1024)]));
+  const { root } = await workspace(t, stub);
+  const relay = new HttpWorkspaceFileImporter({ upstreamUrl: stub.url });
+  const tools = await LocalWorkspaceTools.create({
+    importer: {
+      maxBytes: relay.maxBytes,
+      availableBytes: (directory) => relay.availableBytes(directory),
+      async open(request, signal) {
+        const chunks = await relay.open(request, signal);
+        return (async function* swap() {
+          for await (const chunk of chunks) yield chunk;
+          // Another local process moves the new parent aside and makes its own at that path.
+          await rename(join(root, 'incoming'), join(root, 'moved'));
+          await mkdir(join(root, 'incoming'));
+        })();
+      },
+    },
+    workspaces: [{ id: 'primary', root, writable: true, identity: await captureWorkspaceRootIdentity(root) }],
+  });
+  const failed = await rejection(tools.execute(importRequest(bytes, { path: 'incoming/file.bin' })));
+  assert.equal(failed.code, 'INVALID_REQUEST');
+  assert.equal(failed.mutationMayHaveCommitted, true, 'an unremovable created parent is reported, not hidden');
+  assert.equal((await stat(join(root, 'incoming'))).isDirectory(), true);
+});
+
+test('the stall timeout covers waiting on the source, not slow consumer writes', async (t) => {
+  const bytes = randomBytes(8 * 1024);
+  const stub = await egressStub(t, bytes);
+  stub.respond = (_req, res) => {
+    res.writeHead(200, { 'content-length': String(bytes.byteLength) });
+    res.write(bytes.subarray(0, 4096));
+    setTimeout(() => res.end(bytes.subarray(4096)), 10);
+  };
+  const importer = new HttpWorkspaceFileImporter({ upstreamUrl: stub.url, stallTimeoutMs: 50 });
+  const received: Buffer[] = [];
+  for await (const chunk of await importer.open(importRequest(bytes) as WorkspaceImportFileRequest & { egressGrant: string })) {
+    received.push(Buffer.from(chunk));
+    await delay(150);
+  }
+  assert.deepEqual(Buffer.concat(received), bytes);
 });
 
 test('file and free-space limits fail before anything is written', async (t) => {

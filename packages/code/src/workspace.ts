@@ -1155,10 +1155,28 @@ async function inspectImportTarget(
   }
 }
 
-/** Undo parent directories this import created; true when every one is gone again. */
-async function removeCreatedDirectories(created: readonly string[]): Promise<boolean> {
-  for (const directory of [...created].reverse()) {
+/**
+ * Undo parent directories this import created; true when every one is gone
+ * again. A directory is removed only while it is still the inode this import
+ * created, so a replacement made by another local process is never deleted.
+ */
+async function removeCreatedDirectories(
+  created: readonly string[],
+  identities: readonly ImportTargetIdentity[],
+): Promise<boolean> {
+  if (identities.length !== created.length) return false;
+  for (let index = created.length - 1; index >= 0; index -= 1) {
+    const directory = created[index]!;
     try {
+      const current = await lstat(directory);
+      if (
+        current.isSymbolicLink() ||
+        !current.isDirectory() ||
+        current.dev !== identities[index]!.dev ||
+        current.ino !== identities[index]!.ino
+      ) {
+        return false;
+      }
       await rmdir(directory);
       await syncWorkspaceDirectory(dirname(directory));
     } catch {
@@ -1168,14 +1186,22 @@ async function removeCreatedDirectories(created: readonly string[]): Promise<boo
   return true;
 }
 
-/** Give directories this import created the documented mode regardless of the worker's umask. */
-async function setImportDirectoryModes(created: readonly string[]): Promise<void> {
+/**
+ * Record each directory this import created, then give it the documented mode
+ * regardless of the worker's umask. `identities` fills as each is opened.
+ */
+async function setImportDirectoryModes(
+  created: readonly string[],
+  identities: ImportTargetIdentity[],
+): Promise<void> {
   for (const directory of created) {
     const handle = await open(
       directory,
       constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
     );
     try {
+      const { dev, ino } = await handle.stat();
+      identities.push({ dev, ino });
       await handle.chmod(IMPORT_DIRECTORY_MODE);
     } finally {
       await handle.close();
@@ -1366,7 +1392,21 @@ async function installImportedFile(
     throw new WorkspaceToolError('Workspace storage is unavailable', 'WRITE_UNAVAILABLE');
   } finally {
     await handle?.close().catch(() => undefined);
-    if (temporaryNeedsCleanup) await unlink(temporary).catch(() => undefined);
+    if (temporaryNeedsCleanup) await removeImportStaging(temporary);
+  }
+}
+
+/** A staging file that cannot be removed is upload bytes left in the workspace: never a clean failure. */
+async function removeImportStaging(temporary: string): Promise<void> {
+  try {
+    await unlink(temporary);
+  } catch (error) {
+    if (isMissingEntry(error)) return;
+    throw new WorkspaceToolError(
+      'Workspace import staging file could not be removed',
+      'WRITE_UNAVAILABLE',
+      true,
+    );
   }
 }
 
@@ -1407,8 +1447,9 @@ async function importWorkspaceFile(
     );
   }
   const directories = await createMissingParentDirectories(root, candidate, IMPORT_DIRECTORY_MODE);
+  const identities: ImportTargetIdentity[] = [];
   try {
-    await setImportDirectoryModes(directories);
+    await setImportDirectoryModes(directories, identities);
     const { created } = await installImportedFile(
       root,
       candidate,
@@ -1421,7 +1462,7 @@ async function importWorkspaceFile(
   } catch (error) {
     const failure = classifyWritePathValidationError(error);
     if (directories.length === 0 || failure.mutationMayHaveCommitted) throw failure;
-    if (await removeCreatedDirectories(directories)) throw failure;
+    if (await removeCreatedDirectories(directories, identities)) throw failure;
     throw afterCreatedDirectories(directories, failure);
   }
 }
