@@ -1114,6 +1114,24 @@ function importIntegrityError(message: string): WorkspaceToolError {
   return new WorkspaceToolError(message, 'INVALID_REQUEST');
 }
 
+/** Size and SHA-256 of everything an open file holds now, read through its descriptor. */
+async function hashOpenFile(
+  handle: FileHandle,
+  signal?: AbortSignal,
+): Promise<{ bytes: number; sha256: string }> {
+  const hash = createHash('sha256');
+  const chunk = Buffer.allocUnsafe(IMPORT_HASH_CHUNK_BYTES);
+  let position = 0;
+  for (;;) {
+    throwIfAborted(signal);
+    const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength, position);
+    if (bytesRead === 0) break;
+    hash.update(chunk.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+  return { bytes: position, sha256: hash.digest('hex') };
+}
+
 /** Hash an existing target only when its size already matches the import. */
 async function inspectImportTarget(
   root: string,
@@ -1124,17 +1142,8 @@ async function inspectImportTarget(
     return await withConfinedFile(root, request.path, async (handle, size) => {
       const { dev, ino } = await handle.stat();
       if (size !== request.bytes) return { state: 'different', dev, ino };
-      const hash = createHash('sha256');
-      const chunk = Buffer.allocUnsafe(Math.min(IMPORT_HASH_CHUNK_BYTES, Math.max(1, size)));
-      let position = 0;
-      for (;;) {
-        throwIfAborted(signal);
-        const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength, position);
-        if (bytesRead === 0) break;
-        hash.update(chunk.subarray(0, bytesRead));
-        position += bytesRead;
-      }
-      return position === request.bytes && hash.digest('hex') === request.sha256
+      const existing = await hashOpenFile(handle, signal);
+      return existing.bytes === request.bytes && existing.sha256 === request.sha256
         ? { state: 'unchanged' }
         : { state: 'different', dev, ino };
     });
@@ -1157,6 +1166,21 @@ async function removeCreatedDirectories(created: readonly string[]): Promise<boo
     }
   }
   return true;
+}
+
+/** Give directories this import created the documented mode regardless of the worker's umask. */
+async function setImportDirectoryModes(created: readonly string[]): Promise<void> {
+  for (const directory of created) {
+    const handle = await open(
+      directory,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    try {
+      await handle.chmod(IMPORT_DIRECTORY_MODE);
+    } finally {
+      await handle.close();
+    }
+  }
 }
 
 async function writeImportChunk(handle: FileHandle, chunk: Uint8Array, position: number): Promise<void> {
@@ -1202,9 +1226,12 @@ async function confirmInstalledImport(
 }
 
 /**
- * Stream one object into a same-directory temporary file, verify its size and
- * SHA-256, then install it atomically. A create links exclusively so a racing
- * file is never replaced; an overwrite replaces only the inode it inspected.
+ * Stream one object into a same-directory temporary file, verify the synced
+ * file's size and SHA-256 through its own descriptor, then install it
+ * atomically. A create links exclusively so a racing file is never replaced.
+ * An overwrite rechecks the inspected inode immediately before its rename, the
+ * same check-then-rename `write_file` uses; bridge mutations of one root are
+ * serialized, so only an out-of-band local writer can race that last step.
  */
 async function installImportedFile(
   root: string,
@@ -1247,18 +1274,16 @@ async function installImportedFile(
   try {
     handle = await open(
       temporary,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
       0o600,
     );
     temporaryNeedsCleanup = true;
-    const hash = createHash('sha256');
     let written = 0;
     for await (const chunk of await importer.open(request, signal)) {
       throwIfAborted(signal);
       if (written + chunk.byteLength > request.bytes) {
         throw importIntegrityError('Imported file is larger than its declared size');
       }
-      hash.update(chunk);
       await writeImportChunk(handle, chunk, written);
       written += chunk.byteLength;
     }
@@ -1266,13 +1291,18 @@ async function installImportedFile(
     if (written !== request.bytes) {
       throw importIntegrityError('Imported file is smaller than its declared size');
     }
-    if (hash.digest('hex') !== request.sha256) {
-      throw importIntegrityError('Imported file does not match its declared SHA-256');
-    }
     await handle.chmod(IMPORT_FILE_MODE);
     await handle.sync();
+    // Verify what will be installed, not what arrived: the staged file is a workspace entry.
+    const staged = await hashOpenFile(handle, signal);
+    if (staged.bytes !== request.bytes) {
+      throw importIntegrityError('Imported file does not match its declared size');
+    }
+    if (staged.sha256 !== request.sha256) {
+      throw importIntegrityError('Imported file does not match its declared SHA-256');
+    }
     const stagedStat = await handle.stat();
-    const staged = { dev: stagedStat.dev, ino: stagedStat.ino };
+    const stagedIdentity = { dev: stagedStat.dev, ino: stagedStat.ino };
     if (process.platform === 'win32') {
       await handle.close();
       handle = undefined;
@@ -1329,7 +1359,7 @@ async function installImportedFile(
         );
       }
     }
-    await confirmInstalledImport(root, installTarget, staged);
+    await confirmInstalledImport(root, installTarget, stagedIdentity);
     return { created: target.state === 'missing' };
   } catch (error) {
     if (error instanceof WorkspaceToolError) throw error;
@@ -1378,6 +1408,7 @@ async function importWorkspaceFile(
   }
   const directories = await createMissingParentDirectories(root, candidate, IMPORT_DIRECTORY_MODE);
   try {
+    await setImportDirectoryModes(directories);
     const { created } = await installImportedFile(
       root,
       candidate,

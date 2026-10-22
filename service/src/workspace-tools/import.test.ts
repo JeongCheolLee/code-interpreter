@@ -98,8 +98,8 @@ function appFor(router: express.Router): express.Express {
   return app;
 }
 
-function post(url: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
-  return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+function post(url: string, body: unknown, headers: Record<string, string> = {}, signal?: AbortSignal): Promise<Response> {
+  return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body), signal });
 }
 
 test('ownership follows the download rule and rejects another principal\'s object', async () => {
@@ -198,6 +198,36 @@ test('a synchronous import relays the granted request and revokes its grant', as
   expect(minted).toHaveLength(1);
 });
 
+test('a caller that disconnects while its grant is minted never dispatches, and the grant is revoked', async () => {
+  await upload(redis, owner, SESSION, OBJECT);
+  const minted: string[] = [];
+  const revoked: string[] = [];
+  const base = importService(redis, minted, revoked);
+  const grantRequested = Promise.withResolvers<void>();
+  const releaseGrant = Promise.withResolvers<void>();
+  let dispatched = 0;
+  const url = await listen(appFor(createWorkspaceToolsRouter({
+    backend: 'remote-bridge', configuredWorkerId: 'worker', dynamicWorkers: false,
+    imports: { ...base, async prepare(args) {
+      grantRequested.resolve();
+      await releaseGrant.promise;
+      return base.prepare(args);
+    } },
+    store: { async dispatchWorkspaceTool(): Promise<never> { dispatched++; throw new Error('must not dispatch'); } },
+  })));
+  const caller = new AbortController();
+  const response = post(`${url}/workspace-tools/execute`, importBody(), {}, caller.signal).catch(() => undefined);
+  await grantRequested.promise;
+  caller.abort();
+  await response;
+  await Bun.sleep(50);
+  releaseGrant.resolve();
+  for (let attempt = 0; attempt < 100 && revoked.length === 0; attempt++) await Bun.sleep(10);
+  expect(dispatched).toBe(0);
+  expect(revoked).toEqual(minted);
+  expect(minted).toHaveLength(1);
+});
+
 test('a Code API that cannot mint grants refuses import_file without dispatching', async () => {
   let dispatched = 0;
   const url = await listen(appFor(createWorkspaceToolsRouter({
@@ -230,6 +260,12 @@ test('a durable import fingerprints the caller request and mints its grant once'
     expect(response.status).toBe(202);
     expect(await response.json()).toMatchObject({ state: 'queued', workspaceId: 'primary' });
   }
+  expect(minted).toHaveLength(1);
+
+  // A retry of the same request answers from its record even once the upload is gone.
+  await redis.del(`session:${SESSION}`);
+  const retried = await post(`${url}/workspace-tools/requests`, importBody(), headers);
+  expect(retried.status).toBe(202);
   expect(minted).toHaveLength(1);
 
   const keys = (await redis.keys('codeapi:workspace-requests:v1:*')).filter(key => !key.endsWith(':active'));

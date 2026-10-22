@@ -918,8 +918,12 @@ async function run(
     : undefined;
   // A chat upload reaches the workspace only through the same relay upstream
   // programmatic inputs use; without one the worker never advertises import_file.
+  // Opt-in: a LibreChat that predates import_file rejects a worker status listing it.
+  const allowWorkspaceImports =
+    args.includes('--allow-workspace-imports') ||
+    process.env.LIBRECHAT_CODE_ALLOW_WORKSPACE_IMPORTS?.trim().toLowerCase() === 'true';
   const workspaceImporter =
-    allowWorkspaceWrites && (fileRelayUpstream?.length ?? 0) > 0
+    allowWorkspaceImports && allowWorkspaceWrites && (fileRelayUpstream?.length ?? 0) > 0
       ? new HttpWorkspaceFileImporter({
           upstreamUrl: fileRelayUpstream!,
           maxBytes: positiveInteger(

@@ -201,12 +201,12 @@ test('import_file is advertised only beside writes, on writable roots, with an i
   assert.equal((await rejection(withoutRelay.execute(importRequest(Buffer.from('x'))))).code, 'WRITE_UNAVAILABLE');
 });
 
-test('imports binary bytes atomically into new 0755 parents as a 0644 file', async (t) => {
+test('imports binary bytes atomically into new 0755 parents as a 0644 file, whatever the umask', async (t) => {
   const bytes = Buffer.concat([Buffer.from([0, 0xff, 0x50, 0x4b, 3, 4, 0]), randomBytes(256 * 1024)]);
   const stub = await egressStub(t, bytes);
   const { root, tools } = await workspace(t, stub);
   const request = importRequest(bytes, { path: 'uploads/2026/archive.zip' });
-  const previousUmask = process.umask(0o022);
+  const previousUmask = process.umask(0o077);
   t.after(() => process.umask(previousUmask));
 
   const result = await tools.execute(request);
@@ -300,6 +300,39 @@ test('a hash or size mismatch installs nothing and removes the parents it create
   stub.respond = (_req, res) => res.writeHead(200).end(bytes.subarray(0, 4));
   const short = await rejection(tools.execute(importRequest(bytes, { path: 'file.bin' })));
   assert.match(short.message, /smaller than its declared size/);
+  assert.deepEqual(await readdir(root), []);
+});
+
+test('the staged file is verified after it is synced, not only the bytes that arrived', async (t) => {
+  const bytes = randomBytes(64 * 1024);
+  const stub = await egressStub(t, bytes);
+  const { root } = await workspace(t, stub);
+  const relay = new HttpWorkspaceFileImporter({ upstreamUrl: stub.url });
+  const tools = await LocalWorkspaceTools.create({
+    importer: {
+      maxBytes: relay.maxBytes,
+      availableBytes: (directory) => relay.availableBytes(directory),
+      async open(request, signal) {
+        const chunks = await relay.open(request, signal);
+        return (async function* tamper() {
+          let first = true;
+          for await (const chunk of chunks) {
+            yield chunk;
+            if (!first) continue;
+            first = false;
+            // Another local writer rewrites already-staged bytes before the transfer finishes.
+            const [staged] = await temporaryFiles(root);
+            assert.ok(staged);
+            await writeFile(join(root, staged), Buffer.alloc(chunk.byteLength, 0x41), { flag: 'r+' });
+          }
+        })();
+      },
+    },
+    workspaces: [{ id: 'primary', root, writable: true, identity: await captureWorkspaceRootIdentity(root) }],
+  });
+  const tampered = await rejection(tools.execute(importRequest(bytes, { path: 'payload.bin' })));
+  assert.equal(tampered.code, 'INVALID_REQUEST');
+  assert.match(tampered.message, /SHA-256/);
   assert.deepEqual(await readdir(root), []);
 });
 

@@ -32,8 +32,10 @@ Add one additive workspace operation, `import_file`, under protocol version 1.
   refuses `.git` segments and their filesystem aliases, refuses symlinked
   parents, creates missing parents as 0755, enforces `bytes` while streaming
   into a same-directory temporary file, verifies size and SHA-256, syncs, and
-  installs the file atomically with mode 0644. A create links exclusively; an
-  overwrite replaces only the inode it inspected.
+  installs the file atomically with mode 0644. The size and hash are checked on
+  the synced temporary file itself. A create links exclusively; an overwrite
+  rechecks the inspected inode immediately before its rename, as `write_file`
+  does.
 - **Idempotency.** Identical existing bytes return `unchanged: true` and
   `bytesWritten: 0` without a transfer. Different bytes return `EDIT_CONFLICT`
   unless `overwrite: true`.
@@ -46,8 +48,12 @@ Add one additive workspace operation, `import_file`, under protocol version 1.
   refuses it with `WRITE_DISABLED`.
 - **Negotiation.** Code API lists `import_file` in
   `supportedWorkspaceToolOperations` only when `EGRESS_GATEWAY_URL` is set. A
-  worker advertises it only with writes enabled and a relay upstream, and only
-  to a Code API that listed it. LibreChat sends it only when advertised.
+  worker advertises it only when its operator opted in
+  (`LIBRECHAT_CODE_ALLOW_WORKSPACE_IMPORTS=true`), writes are enabled, a relay
+  upstream is configured, and the Code API listed it. LibreChat sends it only
+  when advertised. The opt-in exists because LibreChat releases that predate
+  `import_file` reject a worker status listing an unknown operation, so a
+  worker upgrade alone must not start advertising it.
 
 ## Consequences
 

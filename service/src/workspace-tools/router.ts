@@ -185,20 +185,18 @@ export function createWorkspaceToolsRouter(options: WorkspaceToolsRouterOptions)
       res.status(error.status).json({ error: error.message, code: error.code });
       return true;
     };
-    let prepareImport: (() => Promise<PreparedWorkspaceImport>) | undefined;
-    if (request.operation === 'import_file' && options.imports != null) {
-      const imports = options.imports;
-      let sessionKey: string;
-      try {
-        sessionKey = await imports.authorize(req, request);
-      } catch (error) {
-        if (sendImportError(error)) return;
-        throw error;
-      }
-      // The grant must outlive admission and execution, never more.
-      const ttlSeconds = Math.ceil((queueBudgetMs + executionBudgetMs) / 1000);
-      prepareImport = () => imports.prepare({ req, request, sessionKey, ttlSeconds });
-    }
+    const imports = options.imports;
+    const importRequest = request.operation === 'import_file' ? request : undefined;
+    /** Ownership and the grant are settled only for work about to be queued or dispatched,
+     * so a durable retry of an existing request never depends on the upload still existing. */
+    const prepareImport = imports == null || importRequest == null
+      ? undefined
+      : async (): Promise<PreparedWorkspaceImport> => {
+        const sessionKey = await imports.authorize(req, importRequest);
+        // The grant must outlive admission and execution, never more.
+        const ttlSeconds = Math.ceil((queueBudgetMs + executionBudgetMs) / 1000);
+        return imports.prepare({ req, request: importRequest, sessionKey, ttlSeconds });
+      };
 
     if (durable) {
       if (options.requests == null) {
@@ -226,17 +224,6 @@ export function createWorkspaceToolsRouter(options: WorkspaceToolsRouterOptions)
       return;
     }
 
-    let preparedImport: PreparedWorkspaceImport | undefined;
-    if (prepareImport != null) {
-      try {
-        preparedImport = await prepareImport();
-      } catch (error) {
-        if (sendImportError(error)) return;
-        throw error;
-      }
-    }
-    const dispatchRequest: WorkspaceToolRequest = preparedImport?.request ?? request;
-
     const controller = new AbortController();
     const abort = (): void => controller.abort();
     req.once('aborted', abort);
@@ -244,7 +231,24 @@ export function createWorkspaceToolsRouter(options: WorkspaceToolsRouterOptions)
       if (!res.writableEnded) abort();
     };
     res.once('close', abortClosedResponse);
+    // Events that fired before these listeners existed are visible only on the socket.
+    if (req.socket?.destroyed === true) abort();
+    let preparedImport: PreparedWorkspaceImport | undefined;
     try {
+      if (prepareImport != null) {
+        try {
+          preparedImport = await prepareImport();
+        } catch (error) {
+          if (sendImportError(error)) return;
+          throw error;
+        }
+        // A caller that left while ownership or the grant was settled must not start a mutation.
+        if (controller.signal.aborted) {
+          outcome.errorCode = 'CLIENT_DISCONNECTED';
+          return;
+        }
+      }
+      const dispatchRequest: WorkspaceToolRequest = preparedImport?.request ?? request;
       outcome.dispatchPending = true;
       const dispatchStartedAt = performance.now();
       const settlement = await options.store.dispatchWorkspaceTool({
