@@ -99,6 +99,12 @@ export class RedisWorkspaceRequests {
     request: WorkspaceToolRequest;
     queueWaitMs: number;
     executionTimeoutMs: number;
+    /**
+     * Derives the request a worker receives, such as an import carrying its
+     * egress grant. Runs only for a new request ID; the fingerprint, and so
+     * idempotent retries, cover the caller's request.
+     */
+    prepare?: () => Promise<WorkspaceToolRequest>;
   }): Promise<WorkspaceRequestStatus> {
     if (!WORKSPACE_REQUEST_ID_PATTERN.test(args.requestId)) {
       throw new BridgeStoreError('ASSIGNMENT_INVALID', 'Invalid durable workspace request ID');
@@ -117,12 +123,13 @@ export class RedisWorkspaceRequests {
     const registration = await this.bridge.prepareDurableWorkspaceTool({
       ...args, tenantId: args.owner.tenantId,
     });
+    const request = args.prepare == null ? args.request : await args.prepare();
     const now = Date.now();
     const record: StoredWorkspaceRequest = {
       id: `durable-${randomBytes(18).toString('base64url')}`, key, fingerprint,
       workerId: args.workerId, tenantId: args.owner.tenantId,
       requireTenantBinding: args.requireTenantBinding,
-      request: args.request, registration, createdAtMs: now,
+      request, registration, createdAtMs: now,
       queueDeadlineAtMs: now + args.queueWaitMs,
       executionTimeoutMs: args.executionTimeoutMs, state: 'queued',
     };

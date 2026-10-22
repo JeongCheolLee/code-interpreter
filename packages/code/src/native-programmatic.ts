@@ -15,7 +15,11 @@ import {
   isSafePortableRelativePath,
   isSupportedBridgeArtifactName,
 } from './protocol.js';
-import { validateFileRelayUpstream } from './relay.js';
+import {
+  FILE_RELAY_GRANT_HEADER,
+  fileRelayObjectUrl,
+  validateFileRelayUpstream,
+} from './relay.js';
 import { WorkspaceToolError } from './workspace.js';
 
 import type {
@@ -25,7 +29,6 @@ import type {
 } from './protocol.js';
 import type { NativeSrtWorkspaceCommandSandbox } from './native-sandbox.js';
 
-const EGRESS_GRANT_HEADER = 'X-CodeAPI-Egress-Grant';
 const EXECUTION_MAIN_FILE = 'main.sh';
 const EXECUTION_HISTORY_FILE = '_ptc_history.json';
 const EXECUTION_CONTROL_FILE = '_ptc_pending_result.json';
@@ -327,12 +330,9 @@ export class NativeWorkspaceProgrammaticExecutor {
     const timer = setTimeout(() => controller.abort(), transferTimeoutMs);
     try {
       const response = await this.fetchImpl(
-        new URL(
-          `sessions/${encodeURIComponent(file.storage_session_id)}/objects/${encodeURIComponent(file.id)}`,
-          `${this.upstream.toString().replace(/\/+$/, '')}/`,
-        ),
+        fileRelayObjectUrl(this.upstream, file.storage_session_id, file.id),
         {
-          headers: { [EGRESS_GRANT_HEADER]: grant },
+          headers: { [FILE_RELAY_GRANT_HEADER]: grant },
           redirect: 'error',
           signal: controller.signal,
         },
@@ -704,14 +704,11 @@ export class NativeWorkspaceProgrammaticExecutor {
             let response: Response;
             try {
               response = await this.fetchImpl(
-                new URL(
-                  `sessions/${encodeURIComponent(outputSessionId!)}/objects/${id}`,
-                  `${this.upstream.toString().replace(/\/+$/, '')}/`,
-                ),
+                fileRelayObjectUrl(this.upstream, outputSessionId!, id),
                 {
                   method: 'PUT',
                   headers: {
-                    [EGRESS_GRANT_HEADER]: grant!,
+                    [FILE_RELAY_GRANT_HEADER]: grant!,
                     'Content-Type': bridgeArtifactMediaType(name),
                     'Content-Length': String(bytes.byteLength),
                     'X-Original-Filename': encodeURIComponent(name),

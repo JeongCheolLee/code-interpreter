@@ -39,6 +39,7 @@ import {
 } from './storage.js';
 import { BridgeWorker } from './worker.js';
 import { LocalWorkspaceTools, SandboxWorkspaceTools } from './workspace.js';
+import { HttpWorkspaceFileImporter } from './workspace-import.js';
 import {
   DockerRuntimeSupervisor,
   EndpointRuntimeSupervisor,
@@ -78,6 +79,7 @@ import type { RuntimeSupervisor } from './runtime.js';
 import type { GitHubCredentialProvider } from './github.js';
 import type { WorkspaceToolExecutor } from './workspace.js';
 import {
+  BRIDGE_WORKSPACE_IMPORT_FILE_DEFAULT_MAX_BYTES,
   BRIDGE_WORKSPACE_NAME_MAX_LENGTH,
   BridgeProtocolError,
     isValidBridgeWorkerCapabilities,
@@ -914,10 +916,25 @@ async function run(
         ]),
       )
     : undefined;
+  // A chat upload reaches the workspace only through the same relay upstream
+  // programmatic inputs use; without one the worker never advertises import_file.
+  const workspaceImporter =
+    allowWorkspaceWrites && (fileRelayUpstream?.length ?? 0) > 0
+      ? new HttpWorkspaceFileImporter({
+          upstreamUrl: fileRelayUpstream!,
+          maxBytes: positiveInteger(
+            'LIBRECHAT_CODE_IMPORT_FILE_MAX_BYTES',
+            option(args, '--import-file-max-bytes') ??
+              process.env.LIBRECHAT_CODE_IMPORT_FILE_MAX_BYTES,
+            BRIDGE_WORKSPACE_IMPORT_FILE_DEFAULT_MAX_BYTES,
+          ),
+        })
+      : undefined;
   const localWorkspaceTools = workerDirectory
     ? await LocalWorkspaceTools.create({
         workspaces: roots,
         repositoryInstructions: args.includes('--repository-instructions'),
+        importer: workspaceImporter,
       })
     : undefined;
   let workspaceTools: WorkspaceToolExecutor | undefined = localWorkspaceTools;
@@ -1298,6 +1315,7 @@ async function run(
             },
             repositoryInstructions: args.includes('--repository-instructions'),
             writable: root.writable ?? false,
+            importer: workspaceImporter,
           },
         ]),
       ),
@@ -1333,6 +1351,7 @@ async function run(
             command: nativeOptionsForWorkspace(root.id),
             repositoryInstructions: args.includes('--repository-instructions'),
             writable: root.writable ?? false,
+            importer: workspaceImporter,
           },
         ]),
       ),
