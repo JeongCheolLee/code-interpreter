@@ -305,8 +305,18 @@ EOF
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODULE_DIR="${SCRIPT_DIR}/node_modules"
-if [ -d "$MODULE_DIR" ] && [ ! -e /mnt/data/node_modules ]; then
-    ln -s "$MODULE_DIR" /mnt/data/node_modules 2>/dev/null || true
+if [ -d "$MODULE_DIR" ]; then
+    if [ -L /mnt/data/node_modules ]; then
+        LINK_TARGET="$(readlink /mnt/data/node_modules)"
+        if [ "$LINK_TARGET" != "$MODULE_DIR" ]; then
+            case "$LINK_TARGET" in
+                "${SCRIPT_DIR%/*/*}/"*/node_modules)
+                    ln -sfnT "$MODULE_DIR" /mnt/data/node_modules ;;
+            esac
+        fi
+    elif [ ! -e /mnt/data/node_modules ]; then
+        ln -s "$MODULE_DIR" /mnt/data/node_modules 2>/dev/null || true
+    fi
 fi
 "${SCRIPT_DIR}/bin/node" "$@"
 EOF
@@ -417,8 +427,18 @@ EOF
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODULE_DIR="${SCRIPT_DIR}/node_modules"
-if [ -d "$MODULE_DIR" ] && [ ! -e /mnt/data/node_modules ]; then
-    ln -s "$MODULE_DIR" /mnt/data/node_modules 2>/dev/null || true
+if [ -d "$MODULE_DIR" ]; then
+    if [ -L /mnt/data/node_modules ]; then
+        LINK_TARGET="$(readlink /mnt/data/node_modules)"
+        if [ "$LINK_TARGET" != "$MODULE_DIR" ]; then
+            case "$LINK_TARGET" in
+                "${SCRIPT_DIR%/*/*}/"*/node_modules)
+                    ln -sfnT "$MODULE_DIR" /mnt/data/node_modules ;;
+            esac
+        fi
+    elif [ ! -e /mnt/data/node_modules ]; then
+        ln -s "$MODULE_DIR" /mnt/data/node_modules 2>/dev/null || true
+    fi
 fi
 "${SCRIPT_DIR}/bun" run "$@"
 EOF
