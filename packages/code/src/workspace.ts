@@ -809,8 +809,10 @@ async function hasMissingParent(root: string, path: string): Promise<boolean> {
  * or `--environment`) under a descriptor held for just this request when its
  * parent is missing, so the mutation, parent creation included, takes the same
  * anchored path a selected project root does and a swapped symlink cannot
- * redirect it outside the root. A held root, an existing parent, or a host that
- * cannot anchor the root runs the mutation as before.
+ * redirect it outside the root. A held root or an existing parent runs the
+ * mutation as before; a root that is no longer a real directory at its path
+ * runs it unanchored and is refused there, creating nothing. A root that
+ * changes between its capture and its open is refused as `INVALID_PATH`.
  */
 async function withAnchoredParentCreation<T>(
   root: string,
@@ -823,8 +825,13 @@ async function withAnchoredParentCreation<T>(
   try {
     return await withWorkspaceRoot(root, identity, action);
   } catch (error) {
-    /** Raised only while opening the root, before `action` ran. */
-    if (error instanceof WorkspaceRootAccessError) return action();
+    /**
+     * Raised only while opening the root, before `action` ran: the root changed after its
+     * identity was captured. Never retry unanchored against whatever replaced it.
+     */
+    if (error instanceof WorkspaceRootAccessError) {
+      throw new WorkspaceToolError('Invalid workspace path', 'INVALID_PATH');
+    }
     throw error;
   }
 }
