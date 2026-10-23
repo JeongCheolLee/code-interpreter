@@ -248,7 +248,8 @@ export class NativeWorkspaceCommandPool {
       if (!entry.sandbox.executeProgrammatic) {
         throw new WorkspaceToolError(
           'Native programmatic executor is unavailable',
-          'COMMAND_UNAVAILABLE'
+          'COMMAND_UNAVAILABLE', false, false,
+          commandFailureDiagnostic('programmatic_preflight', 'prerequisite_failed'),
         );
       }
       return await entry.sandbox.executeProgrammatic(

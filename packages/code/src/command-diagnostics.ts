@@ -1,3 +1,5 @@
+import { BRIDGE_WORKER_ID_PATTERN } from './protocol.js';
+
 /** Worker-local diagnostics: never add these fields to bridge settlements. */
 export type CommandFailureStage =
     | 'allocation'
@@ -75,10 +77,15 @@ export function commandFailureDiagnostic(
     reason: CommandFailureReason,
     error?: unknown,
 ): CommandFailureDiagnostic {
-    const code =
-        error != null && typeof error === 'object' && 'code' in error
-            ? error.code
-            : undefined;
+    let code: unknown;
+    try {
+        // Diagnostic extraction must not execute an exception object's getters.
+        if (error != null && typeof error === 'object') {
+            code = Object.getOwnPropertyDescriptor(error, 'code')?.value;
+        }
+    } catch {
+        // Even an unusual provider error/proxy cannot replace the original failure.
+    }
     return {
         stage,
         reason,
@@ -116,16 +123,26 @@ export function commandFailureEvent(
         keyof CommandFailureDiagnostic | 'event'
     >,
 ): CommandFailureEvent {
-    const id = (value?: string): string | undefined =>
-        value && /^[A-Za-z0-9_-]{1,128}$/.test(value) ? value : undefined;
+    const id = (
+        value: string | undefined,
+        pattern: RegExp,
+    ): string | undefined =>
+        value &&
+        value.length <= 128 &&
+        !/[\r\n]/.test(value) &&
+        pattern.test(value)
+            ? value
+            : undefined;
+    // Assignment/incarnation IDs are opaque and may begin with '-' or '_'.
+    const opaqueIdPattern = /^[A-Za-z0-9._:-]{1,128}$/;
     return {
         event: 'workspace_command_unavailable',
         ...(readCommandFailureDiagnostic(diagnostic) ??
             commandFailureDiagnostic('dispatch', 'executor_rejected')),
-        assignmentId: id(context.assignmentId),
-        workspaceId: id(context.workspaceId),
-        workerId: id(context.workerId),
-        incarnationId: id(context.incarnationId),
+        assignmentId: id(context.assignmentId, opaqueIdPattern),
+        workspaceId: id(context.workspaceId, BRIDGE_WORKER_ID_PATTERN),
+        workerId: id(context.workerId, BRIDGE_WORKER_ID_PATTERN),
+        incarnationId: id(context.incarnationId, opaqueIdPattern),
         operation: context.operation,
         mutationMayHaveCommitted: context.mutationMayHaveCommitted,
         requiresQuarantine: context.requiresQuarantine,

@@ -17,6 +17,7 @@ import {
 } from './protocol.js';
 import { validateFileRelayUpstream } from './relay.js';
 import { WorkspaceToolError } from './workspace.js';
+import { commandSetupFailureDiagnostic } from './command-diagnostics.js';
 
 import type {
   BridgeProgrammaticPayloadFile,
@@ -248,6 +249,25 @@ export class NativeWorkspaceProgrammaticExecutor {
    * real replay will use, then removes the snapshot before registration.
    */
   async prepare(signal?: AbortSignal): Promise<void> {
+    try {
+      await this.prepareOnce(signal);
+    } catch (error) {
+      const diagnostic = commandSetupFailureDiagnostic(
+        'programmatic_preflight', error,
+      );
+      throw error instanceof WorkspaceToolError
+        ? new WorkspaceToolError(
+            error.message, error.code, error.mutationMayHaveCommitted,
+            error.requiresQuarantine, error.commandDiagnostic ?? diagnostic,
+          )
+        : new WorkspaceToolError(
+            'Native executor request failed', 'COMMAND_UNAVAILABLE',
+            false, false, diagnostic,
+          );
+    }
+  }
+
+  private async prepareOnce(signal?: AbortSignal): Promise<void> {
     const createProbeWorkspace =
       this.options.sandbox.createProgrammaticProbeWorkspace;
     if (createProbeWorkspace == null) {

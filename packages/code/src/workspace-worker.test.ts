@@ -9,6 +9,7 @@ import { SandboxWorkspaceTools, WorkspaceToolError } from './workspace.js';
 const incarnationId = 'incarnation-00000001';
 
 test('worker logs command failures locally without changing bridge settlements', async () => {
+  for (const sink of ['sync', 'async', 'pending'] as const) {
   for (const operation of ['execute_command', 'list_files'] as const) {
     const events: unknown[] = [];
     let settlement: Record<string, unknown> | undefined;
@@ -29,7 +30,12 @@ test('worker logs command failures locally without changing bridge settlements',
         },
       },
       workspaceQuarantines: new Map([['primary', mutationQuarantine()]]),
-      onCommandFailure(event) { events.push(event); },
+      onCommandFailure(event) {
+        events.push(event);
+        if (sink === 'sync') throw new Error('private log sink error');
+        if (sink === 'async') return Promise.reject(new Error('private log sink error'));
+        return new Promise<void>(() => {});
+      },
       fetchImpl: async (_input, init) => {
         settlement = JSON.parse(String(init?.body));
         return Response.json({ protocolVersion: 1, accepted: true });
@@ -53,6 +59,7 @@ test('worker logs command failures locally without changing bridge settlements',
     assert.equal(settlement?.errorCode, 'COMMAND_UNAVAILABLE');
     assert.equal('diagnostic' in settlement!, false);
     assert.equal(JSON.stringify(events).includes('secret'), false);
+  }
   }
 });
 

@@ -389,6 +389,43 @@ test('preflights copy-on-write isolation and removes its private snapshot', asyn
   }
 });
 
+test('programmatic prerequisite failures retain their stage before executor dispatch', async t => {
+  const scratch = await mkdtemp(join(tmpdir(), 'native-ptc-diagnostic-'));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  for (const failure of ['missing_probe', 'private_storage', 'isolation_probe'] as const) {
+    let executions = 0;
+    const executor = new NativeWorkspaceProgrammaticExecutor({
+      upstreamUrl: 'http://127.0.0.1:1',
+      sandbox: {
+        async createExecutionDirectory() {
+          if (failure === 'private_storage') throw Object.assign(new Error('secret path'), { code: 'ENOSPC' });
+          return await mkdtemp(join(scratch, 'execution-'));
+        },
+        ...(failure === 'missing_probe' ? {} : {
+          async createProgrammaticProbeWorkspace() {
+            throw new WorkspaceToolError('Probe isolation unavailable', 'COMMAND_UNAVAILABLE');
+          },
+        }),
+        async executeProgrammatic() { executions += 1; throw new Error('must not run'); },
+      },
+    });
+    await assert.rejects(executor.prepare(), error => {
+      assert.ok(error instanceof WorkspaceToolError);
+      assert.equal(error.code, 'COMMAND_UNAVAILABLE');
+      assert.equal(error.mutationMayHaveCommitted, false);
+      assert.equal(error.requiresQuarantine, false);
+      assert.deepEqual(error.commandDiagnostic, {
+        stage: 'programmatic_preflight', reason: 'prerequisite_failed',
+        ...(failure === 'private_storage' ? { osCode: 'ENOSPC' } : {}),
+      });
+      assert.equal(JSON.stringify(error.commandDiagnostic).includes('secret'), false);
+      return true;
+    });
+    assert.equal(executions, 0);
+    assert.deepEqual(await readdir(scratch), []);
+  }
+});
+
 test('keeps replay probes read-only and commits the script exactly once', async () => {
     const scratch = await mkdtemp(join(tmpdir(), 'native-ptc-probe-test-'));
     const phases: boolean[] = [];

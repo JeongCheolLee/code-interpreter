@@ -417,6 +417,8 @@ export class NativeProcessWorkspaceCommandSandbox implements WorkspaceCommandSan
       throw new WorkspaceToolError(
         'Native programmatic file transport is unavailable',
         'COMMAND_UNAVAILABLE',
+        false, false,
+        commandFailureDiagnostic('programmatic_preflight', 'prerequisite_failed'),
       );
     }
         const active = this.executeProgrammaticOnce(

@@ -92,3 +92,60 @@ test('failure events bound correlation IDs and omit free-form error data', () =>
         undefined,
     );
 });
+
+test('diagnostic correlation retains every valid worker/workspace identifier character', () => {
+    const event = commandFailureEvent(undefined, {
+        assignmentId: '_assignment-1',
+        workerId: 'vm.example',
+        workspaceId: 'repo:api',
+        incarnationId: 'worker_v1-2',
+        operation: 'execute_command',
+        mutationMayHaveCommitted: false,
+        requiresQuarantine: false,
+    });
+    assert.equal(event.workerId, 'vm.example');
+    assert.equal(event.workspaceId, 'repo:api');
+    assert.equal(event.incarnationId, 'worker_v1-2');
+    assert.equal(event.assignmentId, '_assignment-1');
+    assert.equal(
+        commandFailureEvent(undefined, { ...event, workerId: 'vm\n' }).workerId,
+        undefined,
+    );
+});
+
+test('diagnostic extraction cannot invoke exception getters or mask a failure', () => {
+    const error = {
+        get code() {
+            throw new Error('private getter');
+        },
+    };
+    assert.deepEqual(
+        commandFailureDiagnostic(
+            'credential_resolution',
+            'credential_failed',
+            error,
+        ),
+        {
+            stage: 'credential_resolution',
+            reason: 'credential_failed',
+        },
+    );
+    assert.deepEqual(
+        commandFailureDiagnostic(
+            'credential_resolution',
+            'credential_failed',
+            new Proxy(
+                {},
+                {
+                    getOwnPropertyDescriptor() {
+                        throw new Error('private proxy');
+                    },
+                },
+            ),
+        ),
+        {
+            stage: 'credential_resolution',
+            reason: 'credential_failed',
+        },
+    );
+});

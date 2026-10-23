@@ -97,7 +97,7 @@ export interface BridgeWorkerOptions {
   fetchImpl?: typeof fetch;
   onError?: (error: unknown) => void;
   /** Local-only, allowlisted command failure metadata; never contains request data. */
-  onCommandFailure?: (event: CommandFailureEvent) => void;
+  onCommandFailure?: (event: CommandFailureEvent) => void | Promise<void>;
   onIdentityChange?: (identity: BridgeWorkerIdentity) => void | Promise<void>;
   onRegistered?: (
     registration: BridgeWorkerRegistrationResponse,
@@ -2130,7 +2130,7 @@ export class BridgeWorker {
             assignment.request.operation === 'execute_command'))
       ) {
         try {
-          this.options.onCommandFailure?.(commandFailureEvent(error.commandDiagnostic, {
+          const event = commandFailureEvent(error.commandDiagnostic, {
             assignmentId: assignment.assignmentId,
             workerId: this.options.workerId,
             incarnationId: this.incarnationId,
@@ -2142,7 +2142,10 @@ export class BridgeWorker {
               : 'execute_command',
             mutationMayHaveCommitted: error.mutationMayHaveCommitted,
             requiresQuarantine: error.requiresQuarantine,
-          }));
+          });
+          void Promise.resolve(this.options.onCommandFailure?.(event)).catch(() => {
+            // A rejected asynchronous log sink must not interrupt settlement.
+          });
         } catch {
           // Observability must never change settlement or quarantine decisions.
         }
