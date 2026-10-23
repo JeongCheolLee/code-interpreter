@@ -632,14 +632,14 @@ the target already exists. Code API dispatches that mode only after the worker
 and server negotiate `create` in `writeFileModes`.
 
 `import_file` copies one stored chat upload into a writable workspace as a
-binary-safe file. It is opt-in: start the worker with
-`--allow-workspace-imports` (or `LIBRECHAT_CODE_ALLOW_WORKSPACE_IMPORTS=true`)
-only once the LibreChat deployment it serves understands `import_file`, because
-older LibreChat releases reject a worker status that lists an operation they do
-not know. It is then advertised only when writes are enabled and
-`LIBRECHAT_CODE_FILE_RELAY_UPSTREAM` names the deployment's egress gateway, and
-only to a Code API that lists it in `supportedWorkspaceToolOperations` (one
-that can mint egress grants). Code API checks that the caller owns the object
+binary-safe file. It is on by default whenever the worker can perform it:
+writes are enabled and `LIBRECHAT_CODE_FILE_RELAY_UPSTREAM` names the
+deployment's egress gateway. It is advertised only to a Code API that lists it
+in `supportedWorkspaceToolOperations` (one that can mint egress grants). Opt out
+with `--no-workspace-imports` or `LIBRECHAT_CODE_ALLOW_WORKSPACE_IMPORTS=false`.
+Update LibreChat before workers: LibreChat releases that predate
+LibreChat-AI/LibreChat#17376 reject a worker status that lists an operation
+they do not know, so a worker serving one of those must opt out. Code API checks that the caller owns the object
 and relays a short-lived grant scoped to that object alone; the worker holds no
 storage credential. The worker applies `write_file`'s path rules, refuses any
 `.git` segment (including case, Unicode-ignorable, trailing-dot and `GIT~1`

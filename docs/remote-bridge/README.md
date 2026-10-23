@@ -172,8 +172,8 @@ whitespace-tolerant matching and multi-location replacement (see
 text, require an existing in-workspace parent directory, reject symlinks, and
 commit atomically. The worker capability is an enforcement boundary; LibreChat
 should still route every mutation through its configurable tool-approval hooks.
-Writable workers with a file relay upstream that opt in with
-`LIBRECHAT_CODE_ALLOW_WORKSPACE_IMPORTS=true` also offer `import_file`, which
+Writable workers with a file relay upstream also offer `import_file` by
+default (opt out with `LIBRECHAT_CODE_ALLOW_WORKSPACE_IMPORTS=false`), which
 copies a chat upload the caller owns into the workspace through a one-object
 egress grant (ADR 0014). It is a file write: a worker without writes enabled
 never advertises it and refuses it with `WRITE_DISABLED`.

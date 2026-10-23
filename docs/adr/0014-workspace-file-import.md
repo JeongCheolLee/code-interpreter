@@ -48,12 +48,13 @@ Add one additive workspace operation, `import_file`, under protocol version 1.
   refuses it with `WRITE_DISABLED`.
 - **Negotiation.** Code API lists `import_file` in
   `supportedWorkspaceToolOperations` only when `EGRESS_GATEWAY_URL` is set. A
-  worker advertises it only when its operator opted in
-  (`LIBRECHAT_CODE_ALLOW_WORKSPACE_IMPORTS=true`), writes are enabled, a relay
-  upstream is configured, and the Code API listed it. LibreChat sends it only
-  when advertised. The opt-in exists because LibreChat releases that predate
-  `import_file` reject a worker status listing an unknown operation, so a
-  worker upgrade alone must not start advertising it.
+  worker advertises it by default whenever writes are enabled, a relay
+  upstream is configured, and the Code API listed it; operators opt out with
+  `--no-workspace-imports` or `LIBRECHAT_CODE_ALLOW_WORKSPACE_IMPORTS=false`.
+  LibreChat sends it only when advertised. LibreChat releases that predate
+  LibreChat-AI/LibreChat#17376 reject a worker status listing an unknown
+  operation, so LibreChat is updated first and the opt-out is the escape
+  hatch for workers serving an older one.
 
 ## Consequences
 

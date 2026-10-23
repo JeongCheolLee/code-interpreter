@@ -24,6 +24,31 @@ export interface HttpWorkspaceFileImporterOptions {
   availableBytes?: (directory: string) => Promise<number>;
 }
 
+/**
+ * The importer a worker runs with, if any. `import_file` is on by default
+ * whenever the worker can perform it: writes enabled and a relay upstream to
+ * reach stored objects. `--no-workspace-imports` or
+ * `LIBRECHAT_CODE_ALLOW_WORKSPACE_IMPORTS=false` opts out; any other value of
+ * that variable fails startup rather than silently choosing either way.
+ */
+export function createWorkspaceFileImporter(input: {
+  optOut: boolean;
+  enabled?: string;
+  writable: boolean;
+  upstreamUrl?: string;
+  maxBytes?: number;
+}): HttpWorkspaceFileImporter | undefined {
+  const enabled = input.enabled?.trim().toLowerCase() ?? '';
+  if (enabled !== '' && enabled !== 'true' && enabled !== 'false') {
+    throw new Error('LIBRECHAT_CODE_ALLOW_WORKSPACE_IMPORTS must be true or false');
+  }
+  const upstreamUrl = input.upstreamUrl?.trim() ?? '';
+  if (input.optOut || enabled === 'false' || !input.writable || upstreamUrl === '') {
+    return undefined;
+  }
+  return new HttpWorkspaceFileImporter({ upstreamUrl, maxBytes: input.maxBytes });
+}
+
 async function filesystemAvailableBytes(directory: string): Promise<number> {
   const stats = await statfs(directory);
   return Number(stats.bavail) * Number(stats.bsize);

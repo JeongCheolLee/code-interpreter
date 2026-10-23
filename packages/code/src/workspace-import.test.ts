@@ -21,7 +21,7 @@ import {
 } from './protocol.js';
 import { captureWorkspaceRootIdentity } from './root-identity.js';
 import { BridgeWorker } from './worker.js';
-import { HttpWorkspaceFileImporter } from './workspace-import.js';
+import { createWorkspaceFileImporter, HttpWorkspaceFileImporter } from './workspace-import.js';
 import { LocalWorkspaceTools, WorkspaceToolError } from './workspace.js';
 
 import type { WorkspaceImportFileRequest, WorkspaceToolRequest } from './protocol.js';
@@ -175,6 +175,33 @@ test('import results must echo the request and account for every byte', () => {
   assert.equal(isWorkspaceToolResult(request, { ...result, sha256: 'b'.repeat(64) }), false);
   assert.equal(isWorkspaceToolResult(request, { ...result, path: 'other.zip' }), false);
   assert.equal(isWorkspaceToolResult(request, { ...result, content: 'x' }), false);
+});
+
+test('a worker imports by default whenever it can, and an explicit opt-out removes it', async (t) => {
+  const upstreamUrl = 'https://code.example.test/egress';
+  const enabled = createWorkspaceFileImporter({ optOut: false, writable: true, upstreamUrl });
+  assert.ok(enabled instanceof HttpWorkspaceFileImporter, 'on by default');
+  for (const value of ['true', ' TRUE ', '']) {
+    assert.ok(createWorkspaceFileImporter({ optOut: false, enabled: value, writable: true, upstreamUrl }));
+  }
+  assert.equal(createWorkspaceFileImporter({ optOut: true, writable: true, upstreamUrl }), undefined, '--no-workspace-imports');
+  assert.equal(createWorkspaceFileImporter({ optOut: false, enabled: 'false', writable: true, upstreamUrl }), undefined);
+  assert.equal(createWorkspaceFileImporter({ optOut: false, enabled: 'False', writable: true, upstreamUrl }), undefined);
+  assert.equal(createWorkspaceFileImporter({ optOut: false, writable: true }), undefined, 'no relay upstream');
+  assert.equal(createWorkspaceFileImporter({ optOut: false, writable: true, upstreamUrl: '  ' }), undefined);
+  assert.equal(createWorkspaceFileImporter({ optOut: false, writable: false, upstreamUrl }), undefined, 'writes disabled');
+  assert.throws(() => createWorkspaceFileImporter({ optOut: false, enabled: 'yes', writable: true, upstreamUrl }), /must be true or false/);
+  assert.equal(createWorkspaceFileImporter({ optOut: false, writable: true, upstreamUrl, maxBytes: 4096 })?.maxBytes, 4096);
+
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'librechat-code-import-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const advertised = await LocalWorkspaceTools.create({ importer: enabled, workspaces: [{ id: 'primary', root, writable: true }] });
+  assert.ok(advertised.capabilities.operations.includes('import_file'));
+  const optedOut = await LocalWorkspaceTools.create({
+    importer: createWorkspaceFileImporter({ optOut: true, writable: true, upstreamUrl }),
+    workspaces: [{ id: 'primary', root, writable: true }],
+  });
+  assert.equal(optedOut.capabilities.operations.includes('import_file'), false);
 });
 
 test('import_file is advertised only beside writes, on writable roots, with an importer', async (t) => {

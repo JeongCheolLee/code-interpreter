@@ -39,7 +39,7 @@ import {
 } from './storage.js';
 import { BridgeWorker } from './worker.js';
 import { LocalWorkspaceTools, SandboxWorkspaceTools } from './workspace.js';
-import { HttpWorkspaceFileImporter } from './workspace-import.js';
+import { createWorkspaceFileImporter } from './workspace-import.js';
 import {
   DockerRuntimeSupervisor,
   EndpointRuntimeSupervisor,
@@ -918,22 +918,18 @@ async function run(
     : undefined;
   // A chat upload reaches the workspace only through the same relay upstream
   // programmatic inputs use; without one the worker never advertises import_file.
-  // Opt-in: a LibreChat that predates import_file rejects a worker status listing it.
-  const allowWorkspaceImports =
-    args.includes('--allow-workspace-imports') ||
-    process.env.LIBRECHAT_CODE_ALLOW_WORKSPACE_IMPORTS?.trim().toLowerCase() === 'true';
-  const workspaceImporter =
-    allowWorkspaceImports && allowWorkspaceWrites && (fileRelayUpstream?.length ?? 0) > 0
-      ? new HttpWorkspaceFileImporter({
-          upstreamUrl: fileRelayUpstream!,
-          maxBytes: positiveInteger(
-            'LIBRECHAT_CODE_IMPORT_FILE_MAX_BYTES',
-            option(args, '--import-file-max-bytes') ??
-              process.env.LIBRECHAT_CODE_IMPORT_FILE_MAX_BYTES,
-            BRIDGE_WORKSPACE_IMPORT_FILE_DEFAULT_MAX_BYTES,
-          ),
-        })
-      : undefined;
+  const workspaceImporter = createWorkspaceFileImporter({
+    optOut: args.includes('--no-workspace-imports'),
+    enabled: process.env.LIBRECHAT_CODE_ALLOW_WORKSPACE_IMPORTS,
+    writable: allowWorkspaceWrites,
+    upstreamUrl: fileRelayUpstream,
+    maxBytes: positiveInteger(
+      'LIBRECHAT_CODE_IMPORT_FILE_MAX_BYTES',
+      option(args, '--import-file-max-bytes') ??
+        process.env.LIBRECHAT_CODE_IMPORT_FILE_MAX_BYTES,
+      BRIDGE_WORKSPACE_IMPORT_FILE_DEFAULT_MAX_BYTES,
+    ),
+  });
   const localWorkspaceTools = workerDirectory
     ? await LocalWorkspaceTools.create({
         workspaces: roots,
