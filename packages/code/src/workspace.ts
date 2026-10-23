@@ -2166,7 +2166,7 @@ export class SandboxWorkspaceTools implements WorkspaceToolExecutor {
         ) {
           throw error;
         }
-        throw new WorkspaceToolError(error.message, error.code, true);
+        throw new WorkspaceToolError(error.message, error.code, true, true, error.commandDiagnostic);
       }
       throw new WorkspaceToolError(
         'Sandboxed command execution unavailable',

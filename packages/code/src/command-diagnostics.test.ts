@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
     commandFailureDiagnostic,
     commandFailureEvent,
+    commandFailureLogLine,
     readCommandFailureDiagnostic,
 } from './command-diagnostics.js';
 
@@ -148,4 +149,17 @@ test('diagnostic extraction cannot invoke exception getters or mask a failure', 
             reason: 'credential_failed',
         },
     );
+});
+
+test('CLI diagnostic lines are complete JSON records without a text prefix', () => {
+    const event = commandFailureEvent(undefined, {
+        assignmentId: 'assignment-1',
+        operation: 'execute_command',
+        mutationMayHaveCommitted: false,
+        requiresQuarantine: false,
+    });
+    const line = commandFailureLogLine(event);
+    assert.equal(line.endsWith('\n'), true);
+    assert.equal(line.split('\n').length, 2);
+    assert.deepEqual(JSON.parse(line), JSON.parse(JSON.stringify(event)));
 });

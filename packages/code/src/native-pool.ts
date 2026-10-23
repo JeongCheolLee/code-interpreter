@@ -162,7 +162,11 @@ export class NativeWorkspaceCommandPool {
     const checked = pending.catch((error) => {
       // Allocation/idle eviction precedes dispatch into the requested root.
       // Do not turn a pool resource failure into an uncertain mutation there.
-      if (error instanceof WorkspaceToolError) throw error;
+      if (error instanceof WorkspaceToolError) {
+        if (error.commandDiagnostic) throw error;
+        throw new WorkspaceToolError(error.message, error.code, error.mutationMayHaveCommitted,
+          error.requiresQuarantine, commandFailureDiagnostic('allocation', 'allocation_failed', error));
+      }
       throw new WorkspaceToolError(
         'Native executor allocation failed',
         'COMMAND_UNAVAILABLE', false, false,

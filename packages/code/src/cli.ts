@@ -5,6 +5,7 @@ import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve, relative, isAbsolute, sep } from 'node:path';
 
 import { pairBridgeWorker } from './pairing.js';
+import { commandFailureLogLine } from './command-diagnostics.js';
 import { runSetupCommand } from './setup-cli.js';
 import { browserSetupProtectedPaths } from './browser-setup.js';
 import { assertPrivateStorageAncestors } from './private-storage.js';
@@ -1512,7 +1513,7 @@ async function run(
   try {
     const worker = new BridgeWorker({
       onCommandFailure: event => {
-        process.stderr.write(`librechat-code: ${JSON.stringify(event)}\n`);
+        process.stderr.write(commandFailureLogLine(event));
       },
       onReady: () => {
         if (readinessReported) return;

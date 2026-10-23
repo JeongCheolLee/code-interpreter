@@ -116,6 +116,11 @@ export interface CommandFailureEvent extends CommandFailureDiagnostic {
     requiresQuarantine: boolean;
 }
 
+/** One complete JSON record, suitable for a JSON-lines log collector. */
+export function commandFailureLogLine(event: CommandFailureEvent): string {
+    return `${JSON.stringify(event)}\n`;
+}
+
 export function commandFailureEvent(
     diagnostic: CommandFailureDiagnostic | undefined,
     context: Omit<

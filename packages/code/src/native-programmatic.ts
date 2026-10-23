@@ -17,7 +17,7 @@ import {
 } from './protocol.js';
 import { validateFileRelayUpstream } from './relay.js';
 import { WorkspaceToolError } from './workspace.js';
-import { commandSetupFailureDiagnostic } from './command-diagnostics.js';
+import { commandFailureDiagnostic, commandSetupFailureDiagnostic } from './command-diagnostics.js';
 
 import type {
   BridgeProgrammaticPayloadFile,
@@ -285,7 +285,14 @@ export class NativeWorkspaceProgrammaticExecutor {
         signal,
       );
     } finally {
-      await rm(executionDirectory, { recursive: true, force: true });
+      try {
+        await rm(executionDirectory, { recursive: true, force: true });
+      } catch (error) {
+        throw new WorkspaceToolError(
+          'Native executor request failed', 'COMMAND_UNAVAILABLE', false, false,
+          commandFailureDiagnostic('cleanup', 'cleanup_failed', error),
+        );
+      }
     }
   }
 
@@ -793,6 +800,9 @@ export class NativeWorkspaceProgrammaticExecutor {
           error instanceof WorkspaceToolError ? error.code : 'COMMAND_UNAVAILABLE',
           false,
           false,
+          error instanceof WorkspaceToolError && error.commandDiagnostic
+            ? error.commandDiagnostic
+            : commandSetupFailureDiagnostic('programmatic_preflight', error),
         );
       }
       if (error instanceof WorkspaceToolError) {
@@ -807,6 +817,7 @@ export class NativeWorkspaceProgrammaticExecutor {
                     error.code,
                     true,
                     true,
+                    error.commandDiagnostic,
                 );
       }
       throw new WorkspaceToolError(
@@ -814,16 +825,18 @@ export class NativeWorkspaceProgrammaticExecutor {
         'COMMAND_UNAVAILABLE',
         true,
         true,
+        commandFailureDiagnostic('dispatch', 'executor_rejected', error),
       );
     } finally {
       try {
                 await rm(executionDirectory, { recursive: true, force: true });
-      } catch {
+      } catch (error) {
         throw new WorkspaceToolError(
           'Native programmatic execution cleanup failed',
           'COMMAND_UNAVAILABLE',
           commandDispatched,
           commandDispatched,
+          commandFailureDiagnostic('cleanup', 'cleanup_failed', error),
         );
       }
     }

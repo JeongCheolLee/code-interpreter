@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -426,6 +426,75 @@ test('programmatic prerequisite failures retain their stage before executor disp
   }
 });
 
+for (const phase of ['preflight', 'probe', 'commit'] as const) {
+  test(`programmatic ${phase} cleanup failures retain cleanup diagnostics and mutation flags`, {
+    skip: process.platform === 'win32' || process.getuid?.() === 0,
+  }, async t => {
+    const scratch = await mkdtemp(join(tmpdir(), 'native-ptc-cleanup-diagnostic-'));
+    t.after(async () => {
+      await chmod(scratch, 0o700);
+      await rm(scratch, { recursive: true, force: true });
+    });
+    const executor = new NativeWorkspaceProgrammaticExecutor({
+      upstreamUrl: 'http://127.0.0.1:1',
+      sandbox: {
+        async createExecutionDirectory() { return await mkdtemp(join(scratch, 'execution-')); },
+        async createProgrammaticProbeWorkspace(directory) {
+          const workspace = join(directory, 'workspace');
+          await mkdir(workspace);
+          if (phase === 'preflight') await chmod(scratch, 0o500);
+          return workspace;
+        },
+        async executeProgrammatic(request) {
+          await chmod(scratch, 0o500);
+          if (phase === 'probe') throw new WorkspaceToolError('Probe failed', 'COMMAND_UNAVAILABLE');
+          return { protocolVersion: 1, operation: 'execute_command', workspaceId: request.workspaceId,
+            stdout: '', stderr: '', exitCode: 0, timedOut: false, truncated: false };
+        },
+      },
+    });
+    const execution = phase === 'preflight' ? executor.prepare() : executor.execute({
+      headers: {}, body: { language: 'bash', version: '5.2.0', session_id: 'session',
+        replay_tool_count: phase === 'probe' ? 1 : 0, files: [{ name: 'main.sh', content: 'true' }] },
+    }, 'primary');
+    await assert.rejects(execution, error => {
+      assert.ok(error instanceof WorkspaceToolError);
+      assert.equal(error.code, 'COMMAND_UNAVAILABLE');
+      assert.equal(error.commandDiagnostic?.stage, 'cleanup');
+      assert.equal(error.commandDiagnostic?.reason, 'cleanup_failed');
+      assert.ok(['EACCES', 'EPERM'].includes(error.commandDiagnostic?.osCode ?? ''));
+      assert.equal(error.mutationMayHaveCommitted, phase === 'commit');
+      assert.equal(error.requiresQuarantine, phase === 'commit');
+      return true;
+    });
+  });
+}
+
+test('programmatic commit normalization preserves the executor diagnostic', async t => {
+  const scratch = await mkdtemp(join(tmpdir(), 'native-ptc-commit-diagnostic-'));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const diagnostic = { stage: 'executor_transport' as const, reason: 'executor_lost' as const };
+  const executor = new NativeWorkspaceProgrammaticExecutor({
+    upstreamUrl: 'http://127.0.0.1:1',
+    sandbox: {
+      async createExecutionDirectory() { return await mkdtemp(join(scratch, 'execution-')); },
+      async executeProgrammatic() {
+        throw new WorkspaceToolError('Executor unavailable', 'COMMAND_UNAVAILABLE', false, false, diagnostic);
+      },
+    },
+  });
+  await assert.rejects(executor.execute({
+    headers: {}, body: { language: 'bash', version: '5.2.0', session_id: 'session',
+      files: [{ name: 'main.sh', content: 'true' }] },
+  }, 'primary'), error => {
+    assert.ok(error instanceof WorkspaceToolError);
+    assert.equal(error.mutationMayHaveCommitted, true);
+    assert.equal(error.requiresQuarantine, true);
+    assert.deepEqual(error.commandDiagnostic, diagnostic);
+    return true;
+  });
+});
+
 test('keeps replay probes read-only and commits the script exactly once', async () => {
     const scratch = await mkdtemp(join(tmpdir(), 'native-ptc-probe-test-'));
     const phases: boolean[] = [];
@@ -659,7 +728,8 @@ for (const failure of ['truncated', 'process-error']) test(`a failed speculative
       async createProgrammaticProbeWorkspace(directory) { const root = join(directory, 'workspace'); await mkdir(root); return root; },
       async executeProgrammatic(request, _directory, _signal, options) {
         assert.equal(options?.probe, true);
-        if (failure === 'process-error') throw new WorkspaceToolError('probe output exceeded its limit', 'COMMAND_UNAVAILABLE', true, true);
+        if (failure === 'process-error') throw new WorkspaceToolError('probe output exceeded its limit', 'COMMAND_UNAVAILABLE', true, true,
+          { stage: 'executor_transport', reason: 'executor_lost' });
         return { protocolVersion: 1, operation: 'execute_command', workspaceId: request.workspaceId,
           exitCode: 0, stdout: '', stderr: '', truncated: true, timedOut: false };
       },
@@ -672,6 +742,8 @@ for (const failure of ['truncated', 'process-error']) test(`a failed speculative
     assert.match(String(error), /probe output exceeded/);
     assert.equal((error as { requiresQuarantine: boolean }).requiresQuarantine, false);
     assert.equal((error as { mutationMayHaveCommitted: boolean }).mutationMayHaveCommitted, false);
+    if (failure === 'process-error') assert.deepEqual((error as WorkspaceToolError).commandDiagnostic,
+      { stage: 'executor_transport', reason: 'executor_lost' });
     return true;
   });
 });
