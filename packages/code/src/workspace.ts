@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path
 
 import type { FileHandle } from 'node:fs/promises';
 import type { CommandFailureDiagnostic } from './command-diagnostics.js';
-import { matchesWorkspaceRoot } from './root-identity.js';
+import { captureWorkspaceRootIdentity, matchesWorkspaceRoot } from './root-identity.js';
 import type { WorkspaceRootIdentity } from './root-identity.js';
 
 import {
@@ -612,6 +612,8 @@ interface WorkspaceRoot {
   identity?: WorkspaceRootIdentity;
   root: string;
   writable: boolean;
+  /** Writable, an importer is configured, and this host can create the parents an import needs. */
+  imports: boolean;
 }
 
 async function verifyDirectoryPathHasNoSymlinks(
@@ -704,8 +706,10 @@ async function classifyMissingWorkspacePath(
  * Creates each missing ancestor of a write target as a real directory beneath
  * the root, one verified level at a time, and syncs each new entry into its
  * parent. Creation needs a held root descriptor, so `mkdirat` is anchored to
- * the root; a pathname-only root creates nothing and its write reports the
- * missing parent. An existing symlink or file stops the walk.
+ * the root; a pathname-only root borrows one through
+ * {@link withAnchoredParentCreation}, and where none can be held creates
+ * nothing and its write reports the missing parent. An existing symlink or
+ * file stops the walk.
  *
  * Created directories are a committed side effect, never rolled back: once one
  * exists, a later failure of this write is reported as a possible mutation, so
@@ -753,6 +757,75 @@ async function createMissingParentDirectories(
     return created;
   } catch (error) {
     throw afterCreatedDirectories(created, classifyWritePathValidationError(error));
+  }
+}
+
+/** The identity to hold `root` by, while it is still a real directory at that exact path. */
+async function anchorableRootIdentity(root: string): Promise<WorkspaceRootIdentity | undefined> {
+  try {
+    const identity = await captureWorkspaceRootIdentity(root);
+    return identity.path === root ? identity : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether this host can hold `root` by descriptor, which creating a missing
+ * parent needs. Exercises the native `openat` path, not only the open.
+ */
+async function canAnchorWorkspaceRoot(
+  root: string,
+  identity?: WorkspaceRootIdentity,
+): Promise<boolean> {
+  const held = identity ?? (await anchorableRootIdentity(root));
+  if (held == null) return false;
+  try {
+    return (await withWorkspaceRoot(root, held, () => realpath(root))) === root;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether `path` names a file whose parent directory is missing beneath `root`. */
+async function hasMissingParent(root: string, path: string): Promise<boolean> {
+  let parent: string;
+  try {
+    parent = dirname(resolveWorkspacePath(root, path));
+  } catch {
+    return false;
+  }
+  if (parent === root) return false;
+  try {
+    await lstat(parent);
+    return false;
+  } catch (error) {
+    return isMissingEntry(error);
+  }
+}
+
+/**
+ * Runs a write or import on a pathname-only root (`--worker-dir`, `--workspace`
+ * or `--environment`) under a descriptor held for just this request when its
+ * parent is missing, so the mutation, parent creation included, takes the same
+ * anchored path a selected project root does and a swapped symlink cannot
+ * redirect it outside the root. A held root, an existing parent, or a host that
+ * cannot anchor the root runs the mutation as before.
+ */
+async function withAnchoredParentCreation<T>(
+  root: string,
+  path: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  if (holdsWorkspaceRoot() || !(await hasMissingParent(root, path))) return action();
+  const identity = await anchorableRootIdentity(root);
+  if (identity == null) return action();
+  try {
+    return await withWorkspaceRoot(root, identity, action);
+  } catch (error) {
+    /** Raised only while opening the root, before `action` ran. */
+    if (error instanceof WorkspaceRootAccessError) return action();
+    throw error;
   }
 }
 
@@ -2295,16 +2368,43 @@ export class LocalWorkspaceTools implements WorkspaceToolExecutor {
     options: LocalWorkspaceToolsOptions,
   ): Promise<LocalWorkspaceTools> {
     const roots = new Map<string, WorkspaceRoot>();
+    for (const workspace of options.workspaces) {
+      let canonicalRoot: string;
+      try {
+        canonicalRoot = await realpath(workspace.root);
+        if (workspace.identity && !await matchesWorkspaceRoot(canonicalRoot, workspace.identity)) throw new Error();
+        await withWorkspaceRoot(canonicalRoot, workspace.identity, async () => undefined);
+        if (!(await stat(canonicalRoot)).isDirectory()) throw new Error();
+      } catch {
+        throw new WorkspaceToolError(
+          'Invalid workspace registration',
+          'REGISTRATION_INVALID',
+        );
+      }
+      const writable = workspace.writable === true;
+      roots.set(workspace.id, {
+        identity: workspace.identity,
+        root: canonicalRoot,
+        writable,
+        /** Imports land in folders that may not exist yet, so only where parents can be created. */
+        imports:
+          writable &&
+          options.importer != null &&
+          (await canAnchorWorkspaceRoot(canonicalRoot, workspace.identity)),
+      });
+    }
     const anyWritable = options.workspaces.some(
       (workspace) => workspace.writable === true,
     );
-    const mutations = [
-      ...WRITE_OPERATIONS,
-      ...(options.importer != null ? IMPORT_OPERATIONS : []),
+    const anyImports = [...roots.values()].some((root) => root.imports);
+    const mutationsFor = (root: WorkspaceRoot | undefined) => [
+      ...(root?.writable ? WRITE_OPERATIONS : []),
+      ...(root?.imports ? IMPORT_OPERATIONS : []),
     ];
     const operations: BridgeWorkspaceToolCapabilities['operations'] = [
       ...READ_OPERATIONS,
-      ...(anyWritable ? mutations : []),
+      ...(anyWritable ? WRITE_OPERATIONS : []),
+      ...(anyImports ? IMPORT_OPERATIONS : []),
     ];
     const workspaces: BridgeWorkspaceDescriptor[] = options.workspaces.map(
       (workspace) => ({
@@ -2314,7 +2414,7 @@ export class LocalWorkspaceTools implements WorkspaceToolExecutor {
           ? {
               operations: [
                 ...READ_OPERATIONS,
-                ...(workspace.writable === true ? mutations : []),
+                ...mutationsFor(roots.get(workspace.id)),
               ],
             }
           : {}),
@@ -2337,25 +2437,6 @@ export class LocalWorkspaceTools implements WorkspaceToolExecutor {
         'REGISTRATION_INVALID',
       );
     }
-    for (const workspace of options.workspaces) {
-      let canonicalRoot: string;
-      try {
-        canonicalRoot = await realpath(workspace.root);
-        if (workspace.identity && !await matchesWorkspaceRoot(canonicalRoot, workspace.identity)) throw new Error();
-        await withWorkspaceRoot(canonicalRoot, workspace.identity, async () => undefined);
-        if (!(await stat(canonicalRoot)).isDirectory()) throw new Error();
-      } catch {
-        throw new WorkspaceToolError(
-          'Invalid workspace registration',
-          'REGISTRATION_INVALID',
-        );
-      }
-      roots.set(workspace.id, {
-        identity: workspace.identity,
-        root: canonicalRoot,
-        writable: workspace.writable === true,
-      });
-    }
     const tools = new LocalWorkspaceTools(
       roots,
       operations,
@@ -2364,7 +2445,7 @@ export class LocalWorkspaceTools implements WorkspaceToolExecutor {
       capabilities.editFileModes,
       capabilities.editFileFeatures,
       capabilities.listFileFeatures,
-      anyWritable ? options.importer : undefined,
+      anyImports ? options.importer : undefined,
     );
     tools.repositoryInstructions = options.repositoryInstructions === true;
     return tools;
@@ -2413,13 +2494,16 @@ export class LocalWorkspaceTools implements WorkspaceToolExecutor {
           'WRITE_DISABLED',
         );
       }
-      if (this.importer == null) {
+      const { importer } = this;
+      if (importer == null || !workspace.imports) {
         throw new WorkspaceToolError(
           'Workspace file import is not configured on this worker',
           'WRITE_UNAVAILABLE',
         );
       }
-      return importWorkspaceFile(root, request, this.importer, signal);
+      return withAnchoredParentCreation(root, request.path, () =>
+        importWorkspaceFile(root, request, importer, signal),
+      );
     }
 
     if (
@@ -2440,7 +2524,9 @@ export class LocalWorkspaceTools implements WorkspaceToolExecutor {
         );
       }
       if (request.operation === 'write_file') {
-        return writeWorkspaceFile(root, request, signal);
+        return withAnchoredParentCreation(root, request.path, () =>
+          writeWorkspaceFile(root, request, signal),
+        );
       }
       return request.operation === 'preview_edit'
         ? previewWorkspaceEdit(root, request, signal)

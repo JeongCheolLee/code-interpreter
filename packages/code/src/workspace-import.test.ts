@@ -258,6 +258,47 @@ test('imports binary bytes atomically into new 0755 parents as a 0644 file, what
   assert.equal(stub.hits, 1);
 });
 
+test('a pathname-only root takes chat attachments into a folder it creates, as LibreChat sends them', async (t) => {
+  const bytes = randomBytes(8192);
+  const stub = await egressStub(t, bytes);
+  const { root, tools } = await workspace(t, stub, { held: false });
+  assert.ok(tools.capabilities.workspaces[0]?.operations?.includes('import_file'));
+  const previousUmask = process.umask(0o077);
+  t.after(() => process.umask(previousUmask));
+
+  const ignore = await tools.execute({
+    protocolVersion: 1,
+    operation: 'write_file',
+    workspaceId: 'primary',
+    path: '.librechat/attachments/.gitignore',
+    content: '*\n',
+    overwrite: false,
+  });
+  assert.equal((ignore as { created: boolean }).created, true);
+  const request = importRequest(bytes, { path: '.librechat/attachments/report.pdf', overwrite: false });
+  assert.equal((await tools.execute(request) as { created: boolean }).created, true);
+  assert.deepEqual(await readFile(join(root, '.librechat', 'attachments', 'report.pdf')), bytes);
+
+  const direct = importRequest(bytes, { path: 'uploads/2026/archive.zip' });
+  assert.equal((await tools.execute(direct) as { created: boolean }).created, true);
+  assert.equal((await stat(join(root, 'uploads'))).mode & 0o777, 0o755);
+  assert.equal((await stat(join(root, 'uploads', '2026'))).mode & 0o777, 0o755);
+  assert.equal((await stat(join(root, 'uploads', '2026', 'archive.zip'))).mode & 0o777, 0o644);
+  assert.equal(stub.hits, 2);
+});
+
+test('a failed import on a pathname-only root removes the parents it created', async (t) => {
+  const stub = await egressStub(t, Buffer.from('tampered bytes'));
+  const { root, tools } = await workspace(t, stub, { held: false });
+
+  const mismatch = await rejection(
+    tools.execute(importRequest(Buffer.from('expected bytes'), { path: '.librechat/attachments/file.bin' })),
+  );
+  assert.equal(mismatch.code, 'INVALID_REQUEST');
+  assert.equal(mismatch.mutationMayHaveCommitted, false);
+  assert.deepEqual(await readdir(root), []);
+});
+
 test('re-importing identical bytes is idempotent and never downloads again', async (t) => {
   const bytes = randomBytes(4096);
   const stub = await egressStub(t, bytes);

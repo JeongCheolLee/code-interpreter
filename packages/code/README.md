@@ -630,6 +630,13 @@ with `--allow-workspace-writes` or
 `overwrite: false` to require an atomic create that returns `EDIT_CONFLICT` if
 the target already exists. Code API dispatches that mode only after the worker
 and server negotiate `create` in `writeFileModes`.
+`write_file` and `import_file` create missing parent directories one level at
+a time through `mkdirat` on a held root descriptor, so a swapped symlink cannot
+redirect them outside the root. Selected projects, linked-worktree lanes and
+conversation worktrees hold that descriptor for every request; a root
+registered by path alone (`--worker-dir`, `--workspace`, `--environment`) holds
+one for just the write or import whose parent is missing. A root the worker
+cannot hold by descriptor is never advertised `import_file`.
 
 `import_file` copies one stored chat upload into a writable workspace as a
 binary-safe file. It is on by default whenever the worker can perform it:
@@ -644,7 +651,7 @@ and relays a short-lived grant scoped to that object alone; the worker holds no
 storage credential. The worker applies `write_file`'s path rules, refuses any
 `.git` segment (including case, Unicode-ignorable, trailing-dot and `GIT~1`
 aliases) and symlinked parents, creates missing parents as 0755 under a held
-root, streams into a same-directory temporary file with `bytes` as a hard cap,
+root descriptor, streams into a same-directory temporary file with `bytes` as a hard cap,
 verifies size and SHA-256, syncs, and installs the file atomically with mode
 0644. Identical existing bytes return `unchanged: true` without a transfer;
 different bytes return `EDIT_CONFLICT` unless `overwrite: true`. A failure
