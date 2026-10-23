@@ -1511,6 +1511,9 @@ async function run(
   let readinessReported = false;
   try {
     const worker = new BridgeWorker({
+      onCommandFailure: event => {
+        process.stderr.write(`librechat-code: ${JSON.stringify(event)}\n`);
+      },
       onReady: () => {
         if (readinessReported) return;
         readinessReported = true;

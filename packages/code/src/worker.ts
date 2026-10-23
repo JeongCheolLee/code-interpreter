@@ -17,6 +17,8 @@ import { EndpointRuntimeSupervisor } from './runtime.js';
 import { signBridgeRequest } from './identity.js';
 import { recoverWorkerCredential } from './credential-recovery.js';
 import { isWorkspaceToolRequest, WorkspaceToolError } from './workspace.js';
+import { commandFailureEvent } from './command-diagnostics.js';
+import type { CommandFailureEvent } from './command-diagnostics.js';
 
 import type {
   WorkspaceCommandResultFeature,
@@ -94,6 +96,8 @@ export interface BridgeWorkerOptions {
   credentialRefreshTransportTimeoutMs?: number;
   fetchImpl?: typeof fetch;
   onError?: (error: unknown) => void;
+  /** Local-only, allowlisted command failure metadata; never contains request data. */
+  onCommandFailure?: (event: CommandFailureEvent) => void;
   onIdentityChange?: (identity: BridgeWorkerIdentity) => void | Promise<void>;
   onRegistered?: (
     registration: BridgeWorkerRegistrationResponse,
@@ -2117,6 +2121,32 @@ export class BridgeWorker {
         result: payload,
       };
     } catch (error) {
+      if (
+        error instanceof WorkspaceToolError &&
+        error.code === 'COMMAND_UNAVAILABLE' &&
+        (assignment.executionKind === 'workspace_programmatic' ||
+          (assignment.executionKind === 'workspace_tool' &&
+            isWorkspaceToolRequest(assignment.request) &&
+            assignment.request.operation === 'execute_command'))
+      ) {
+        try {
+          this.options.onCommandFailure?.(commandFailureEvent(error.commandDiagnostic, {
+            assignmentId: assignment.assignmentId,
+            workerId: this.options.workerId,
+            incarnationId: this.incarnationId,
+            workspaceId: assignment.executionKind === 'workspace_programmatic'
+              ? assignment.workspaceId
+              : (isWorkspaceToolRequest(assignment.request) ? assignment.request.workspaceId : undefined),
+            operation: assignment.executionKind === 'workspace_programmatic'
+              ? 'workspace_programmatic'
+              : 'execute_command',
+            mutationMayHaveCommitted: error.mutationMayHaveCommitted,
+            requiresQuarantine: error.requiresQuarantine,
+          }));
+        } catch {
+          // Observability must never change settlement or quarantine decisions.
+        }
+      }
       if (
         error instanceof BridgeWorkspaceQuarantinedError &&
         !workspaceMutationArmed
