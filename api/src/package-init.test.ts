@@ -28,7 +28,7 @@ for (const oldRuntimeExists of [false, true]) {
                     args: ['hello world', '--version'],
                 },
                 {
-                    directory: 'bun/1.4.2',
+                    directory: 'bun/1.4.4',
                     binary: 'bun',
                     args: ['run', 'hello world', '--version'],
                 },
@@ -131,7 +131,7 @@ for (const oldRuntimeExists of [false, true]) {
                 FORCE_REBUILD: 'false',
                 PYTHON_VERSION: '3.14.4',
                 NODE_VERSION: '24.22.1',
-                BUN_VERSION: '1.4.2',
+                BUN_VERSION: '1.4.4',
                 BASH_PACKAGE_VERSION: '5.2.0',
                 JS_PACKAGE_MANIFEST: manifest,
             };

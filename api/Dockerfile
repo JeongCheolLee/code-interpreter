@@ -50,7 +50,7 @@ ENV SANDBOX_PIPE_ADDON=/usr/local/lib/anonymous-pipes.node
 COPY docker/python-runtime /python-runtime
 RUN python3 /python-runtime/install.py
 COPY --from=node:22.23.4-slim /usr/local/bin/node /usr/local/bin/node
-COPY --from=oven/bun:1.4.2-debian /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.4.4-debian /usr/local/bin/bun /usr/local/bin/bun
 
 # ============================================================================
 # Stage 1b: Build language runtime packages (only consumed by sandbox-runner-baked)
@@ -64,7 +64,7 @@ FROM buildpack-deps:bookworm AS package-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHON_VERSION=3.14.4
-ENV BUN_VERSION=1.4.2
+ENV BUN_VERSION=1.4.4
 
 COPY docker/apt-install.sh /usr/local/bin/apt-install
 RUN chmod +x /usr/local/bin/apt-install
@@ -87,7 +87,7 @@ RUN chmod +x /package-init.sh && FORCE_REBUILD=true /package-init.sh
 # ============================================================================
 # Stage 2: Build sandbox rootfs
 # ============================================================================
-FROM oven/bun:1.4.2-debian AS sandbox-build
+FROM oven/bun:1.4.4-debian AS sandbox-build
 
 ENV DEBIAN_FRONTEND=noninteractive
 

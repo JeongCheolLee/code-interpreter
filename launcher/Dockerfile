@@ -49,7 +49,7 @@ RUN gcc -shared -fPIC -O2 -Wall -Wextra -Werror -I/usr/local/include/node -o /us
     && gcc -O2 -static -o /usr/local/bin/sandbox-rootfs-setup /tmp/rootfs-setup.c \
     && chmod 0111 /usr/local/bin/spec-guard /usr/local/bin/sandbox-rootfs-setup
 
-FROM oven/bun:1.4.2-debian AS sandbox-build
+FROM oven/bun:1.4.4-debian AS sandbox-build
 
 ENV DEBIAN_FRONTEND=noninteractive
 

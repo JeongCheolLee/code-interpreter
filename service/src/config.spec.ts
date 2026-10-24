@@ -80,15 +80,15 @@ describe('runtime version configuration', () => {
     });
   });
 
-  it('maps Bun JavaScript and TypeScript requests to Bun 1.4.2', () => {
+  it('maps Bun JavaScript and TypeScript requests to Bun 1.4.4', () => {
     expect(languageConfig[Languages.js]).toMatchObject({
       language: 'bun-js',
-      version: '1.4.2',
+      version: '1.4.4',
       fileName: 'index.js',
     });
     expect(languageConfig[Languages.ts]).toMatchObject({
       language: 'bun-ts',
-      version: '1.4.2',
+      version: '1.4.4',
       fileName: 'main.ts',
     });
   });
